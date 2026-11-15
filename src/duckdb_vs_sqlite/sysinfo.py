@@ -6,7 +6,6 @@ import os
 import platform
 import sqlite3
 import subprocess
-import sys
 from importlib import metadata
 
 import psutil
@@ -71,7 +70,6 @@ def collect() -> dict:
         "cores_logical": psutil.cpu_count(logical=True) or os.cpu_count(),
         "ram_gb": round(psutil.virtual_memory().total / 1024**3, 1),
         "python": f"{platform.python_implementation()} {platform.python_version()}",
-        "python_executable": sys.executable,
         "sqlite": sqlite3.sqlite_version,
         "duckdb": _version("duckdb"),
         "pyarrow": _version("pyarrow"),

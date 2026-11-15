@@ -3,18 +3,54 @@
 from __future__ import annotations
 
 import argparse
-import json
+import re
 import sys
+import tempfile
 import webbrowser
 from pathlib import Path
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
-from .config import ENGINES, PRESETS, WIDTHS, make_config, parse_sizes
+from .config import ENGINES, PRESETS, SQLITE_SYNCHRONOUS, WIDTHS, FieldError, make_config, parse_sizes
 
 DEFAULT_OUT = Path("results")
 DEFAULT_WORKDIR = Path(".bench-work")
+
+
+def _split(text: str) -> list[str]:
+    """Comma-separated list without blanks or repeats, order preserved."""
+    return list(dict.fromkeys(part.strip() for part in text.split(",") if part.strip()))
+
+
+def _lookup(kind: str, table: dict, keys: list[str]) -> list:
+    unknown = [k for k in keys if k not in table]
+    if unknown:
+        raise ValueError(f"unknown {kind} {', '.join(unknown)} (available: {', '.join(table)})")
+    return [table[k] for k in keys]
+
+
+def _check_dirs(out: Path, workdir: Path) -> None:
+    """Fail before the benchmark, not during or after it, if a directory cannot be used."""
+    for flag, directory in (("--out", out), ("--workdir", workdir)):
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            # Write for real: os.access() ignores ACLs on Windows and can be wrong on network drives.
+            with tempfile.TemporaryFile(dir=directory):
+                pass
+        except OSError as exc:
+            raise ValueError(f"cannot use {flag} {directory}: {exc.strerror or exc}") from None
+
+
+# BenchConfig names fields; on the command line the user typed a flag.
+_FLAG_OF_FIELD = {
+    "repeats": "--repeats",
+    "oltp_read_ops": "--oltp-read-ops",
+    "oltp_write_ops": "--oltp-write-ops",
+    "budget_s": "--budget",
+    "sqlite_synchronous": "--sqlite-synchronous",
+}
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -40,7 +76,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--oltp-write-ops", type=int, help="commits per OLTP write workload")
     run.add_argument("--budget", type=float, metavar="SECONDS",
                      help="soft time limit per workload, per engine, per database")
-    run.add_argument("--sqlite-synchronous", choices=["FULL", "NORMAL", "OFF"],
+    run.add_argument("--sqlite-synchronous", choices=SQLITE_SYNCHRONOUS,
                      help="SQLite durability (default FULL: fsync every commit, like DuckDB)")
     run.add_argument("--only", metavar="REGEX", help="only record workloads whose key matches (see 'dvs list')")
     run.add_argument("--out", type=Path, default=DEFAULT_OUT, help="output directory (default: ./results)")
@@ -77,26 +113,27 @@ def _cmd_run(args: argparse.Namespace, console: Console) -> int:
     from .report import build_dashboard
     from .runner import Runner, save_results
 
+    # Each flag's dest is its name: "--oltp-read-ops" -> args.oltp_read_ops.
     overrides: dict = {
-        "repeats": args.repeats,
-        "oltp_read_ops": args.oltp_read_ops,
-        "oltp_write_ops": args.oltp_write_ops,
-        "budget_s": args.budget,
-        "sqlite_synchronous": args.sqlite_synchronous,
+        field: getattr(args, flag.lstrip("-").replace("-", "_")) for field, flag in _FLAG_OF_FIELD.items()
     }
     try:
-        if args.rows:
+        if args.rows is not None:
             overrides["sizes"] = parse_sizes(args.rows)
-        if args.widths:
-            overrides["widths"] = [WIDTHS[w.strip()] for w in args.widths.split(",") if w.strip()]
-        engine_keys = [e.strip() for e in (args.engines or "sqlite,duckdb").split(",") if e.strip()]
-        if args.duckdb_single_thread and "duckdb-1t" not in engine_keys:
+        if args.widths is not None:
+            overrides["widths"] = _lookup("row width", WIDTHS, _split(args.widths))
+        engine_keys = _split("sqlite,duckdb" if args.engines is None else args.engines)
+        if engine_keys and args.duckdb_single_thread and "duckdb-1t" not in engine_keys:
             engine_keys.append("duckdb-1t")
-        overrides["engines"] = [ENGINES[k] for k in engine_keys]
-    except (KeyError, ValueError) as exc:
-        console.print(f"[red]invalid option:[/red] {exc}")
+        overrides["engines"] = _lookup("engine", ENGINES, engine_keys)
+        if args.only:
+            re.compile(args.only)
+        cfg = make_config(args.preset, **overrides)  # validates the combined configuration
+        _check_dirs(args.out, args.workdir)
+    except (ValueError, re.error) as exc:
+        message = f"{_FLAG_OF_FIELD.get(exc.field, exc.field)} {exc.problem}" if isinstance(exc, FieldError) else str(exc)
+        console.print(f"[red]invalid option:[/red] {escape(message)}")
         return 2
-    cfg = make_config(args.preset, **overrides)
 
     runner = Runner(cfg, args.workdir, console=console, only=args.only, keep_data=args.keep_data)
     results = runner.run()
@@ -110,17 +147,20 @@ def _cmd_run(args: argparse.Namespace, console: Console) -> int:
 
 
 def _cmd_report(args: argparse.Namespace, console: Console) -> int:
-    from .report import build_dashboard
+    from .report import build_dashboard, load_results
 
     paths = args.results or [DEFAULT_OUT / "latest.json"]
-    runs = []
-    for path in paths:
-        if not path.exists():
-            console.print(f"[red]no such results file:[/red] {path}")
-            return 2
-        runs.append(json.loads(path.read_text(encoding="utf-8")))
+    try:
+        runs = [load_results(path) for path in paths]
+    except ValueError as exc:
+        console.print(f"[red]invalid results file:[/red] {escape(str(exc))}")
+        return 2
     output = args.output or paths[0].parent / "dashboard.html"
-    dashboard = build_dashboard(runs, output)
+    try:
+        dashboard = build_dashboard(runs, output)
+    except OSError as exc:
+        console.print(f"[red]cannot write the dashboard:[/red] {escape(f'{output}: {exc.strerror or exc}')}")
+        return 2
     _print_path(console, "dashboard:", dashboard)
     _open(dashboard, args.no_open)
     return 0

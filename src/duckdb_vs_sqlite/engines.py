@@ -8,6 +8,7 @@ load path - lives here.
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 from pathlib import Path
 from time import perf_counter
@@ -66,22 +67,34 @@ class Engine:
     def db_path(self, workdir: Path) -> Path:
         return workdir / f"bench-{self.spec.key}{self.file_suffix}"
 
-    def file_bytes(self, path: Path) -> int:
+    # The file helpers depend only on the engine kind, so they also work on the class.
+    @classmethod
+    def file_bytes(cls, path: Path) -> int:
         total = 0
-        for candidate in (path, *self.sidecar_files(path)):
+        for candidate in (path, *cls.sidecar_files(path)):
             if candidate.exists():
                 total += candidate.stat().st_size
         return total
 
-    def sidecar_files(self, path: Path) -> list[Path]:
+    @classmethod
+    def sidecar_files(cls, path: Path) -> list[Path]:
         return []
 
-    def remove_files(self, path: Path) -> None:
-        for candidate in (path, *self.sidecar_files(path)):
+    @classmethod
+    def spill_dirs(cls, path: Path) -> list[Path]:
+        """Directories the engine itself creates next to the database for temporary data."""
+        return []
+
+    @classmethod
+    def remove_files(cls, path: Path) -> None:
+        """Delete a database with everything the engine put beside it. Never raises."""
+        for candidate in (path, *cls.sidecar_files(path)):
             try:
                 candidate.unlink()
             except OSError:
                 pass  # missing, or (Windows) still locked: the next load drops the tables anyway
+        for directory in cls.spill_dirs(path):
+            shutil.rmtree(directory, ignore_errors=True)
 
 
 class SqliteEngine(Engine):
@@ -103,7 +116,7 @@ class SqliteEngine(Engine):
             "driver": "sqlite3 (Python standard library)",
             "journal_mode": "WAL",
             "synchronous": f"{self.cfg.sqlite_synchronous} (fsync on every commit)"
-            if self.cfg.sqlite_synchronous.upper() == "FULL"
+            if self.cfg.sqlite_synchronous == "FULL"
             else self.cfg.sqlite_synchronous,
             "cache_size": f"{self.cfg.sqlite_cache_mb} MB",
             "temp_store": "MEMORY",
@@ -138,7 +151,8 @@ class SqliteEngine(Engine):
     def checkpoint(self, con) -> None:
         con.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
 
-    def sidecar_files(self, path: Path) -> list[Path]:
+    @classmethod
+    def sidecar_files(cls, path: Path) -> list[Path]:
         return [path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")]
 
 
@@ -198,8 +212,14 @@ class DuckDBEngine(Engine):
     def checkpoint(self, con) -> None:
         con.execute("CHECKPOINT")
 
-    def sidecar_files(self, path: Path) -> list[Path]:
+    @classmethod
+    def sidecar_files(cls, path: Path) -> list[Path]:
         return [path.with_name(path.name + ".wal")]
+
+    @classmethod
+    def spill_dirs(cls, path: Path) -> list[Path]:
+        # Larger-than-memory operators spill here; a killed run leaves it behind.
+        return [path.with_name(path.name + ".tmp")]
 
 
 def make_engine(spec: EngineSpec, cfg: BenchConfig) -> Engine:

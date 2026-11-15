@@ -4,23 +4,20 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from . import sysinfo
-from .config import BenchConfig, SizeSpec, WidthSpec, human_rows
+from .config import SCHEMA_VERSION, BenchConfig, SizeSpec, WidthSpec, human_rows
 from .datagen import Staging, n_customers, order_columns
-from .engines import Engine, make_engine
+from .engines import DuckDBEngine, Engine, make_engine
 from .stats import summarize
 from .workloads import BY_KEY, EXECUTION_ORDER, WORKLOADS, Ctx
-
-SCHEMA_VERSION = 1
-
 
 def format_seconds(value: float | None) -> str:
     if value is None:
@@ -32,14 +29,6 @@ def format_seconds(value: float | None) -> str:
     if value < 1:
         return f"{value * 1e3:.2f} ms"
     return f"{value:.2f} s"
-
-
-def format_bytes(value: float) -> str:
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if value < 1024 or unit == "TB":
-            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
-        value /= 1024
-    return f"{value:.1f} TB"
 
 
 class Runner:
@@ -57,26 +46,37 @@ class Runner:
     def run(self) -> dict:
         started = datetime.now(timezone.utc)
         t_start = perf_counter()
-        self.workdir.mkdir(parents=True, exist_ok=True)
         engines = [make_engine(spec, self.cfg) for spec in self.cfg.engines]
         system = sysinfo.collect()
+        # Labels and system strings are data, not markup.
         self.console.print(
             f"[bold]DuckDB {system['duckdb']} vs SQLite {system['sqlite']}[/bold]  "
-            f"({system['python']}, {system['os']}, {system['cores_logical']} logical cores, {system['ram_gb']} GB RAM)"
+            + escape(f"({system['python']}, {system['os']}, {system['cores_logical']} logical cores, "
+                     f"{system['ram_gb']} GB RAM)")
         )
         self.console.print(
-            f"preset [bold]{self.cfg.preset}[/bold]: "
-            + ", ".join(f"{s.label.lower()} = {s.rows:,} rows" for s in self.cfg.sizes)
-            + f"; widths: {', '.join(w.key for w in self.cfg.widths)}"
-            + f"; engines: {', '.join(e.spec.label for e in engines)}\n"
+            f"preset [bold]{escape(self.cfg.preset)}[/bold]: "
+            + escape(
+                ", ".join(f"{s.label.lower()} = {s.rows:,} rows" for s in self.cfg.sizes)
+                + f"; widths: {', '.join(w.key for w in self.cfg.widths)}"
+                + f"; engines: {', '.join(e.spec.label for e in engines)}"
+            )
+            + "\n"
         )
         try:
+            self.workdir.mkdir(parents=True, exist_ok=True)
             for size in self.cfg.sizes:
                 for width in self.cfg.widths:
                     self._run_shape(size, width, engines)
         finally:
             if not self.keep_data:
-                shutil.rmtree(self.workdir, ignore_errors=True)
+                # Every scratch file is deleted by whoever created it. Only ever remove the
+                # directory itself, and only if it is empty: --workdir may point at a
+                # directory that holds the user's own files.
+                try:
+                    self.workdir.rmdir()
+                except OSError:
+                    pass
 
         finished = datetime.now(timezone.utc)
         return {
@@ -109,25 +109,22 @@ class Runner:
 
     def _run_shape(self, size: SizeSpec, width: WidthSpec, engines: list[Engine]) -> None:
         title = f"{size.label} database ({human_rows(size.rows)} rows) x {width.label.lower()}"
-        self.console.rule(f"[bold]{title}")
+        self.console.rule(f"[bold]{escape(title)}")
         staging_path = self.workdir / "staging.duckdb"
-        for leftover in (staging_path, staging_path.with_name(staging_path.name + ".wal")):
-            leftover.unlink(missing_ok=True)
+        DuckDBEngine.remove_files(staging_path)  # leftovers of an interrupted run
         staging = Staging(staging_path, size.rows, width.key, self.cfg.extra_rows, self.cfg.seed)
-        with self.console.status(f"generating {size.rows + self.cfg.extra_rows:,} rows ..."):
-            t0 = perf_counter()
-            staging.build()
-            pool = staging.extra_tuples()
-        self.console.print(f"[dim]generated dataset in {perf_counter() - t0:.1f} s[/dim]")
-
         shape_results: dict[str, dict[str, dict]] = {}
         try:
+            with self.console.status(f"generating {size.rows + self.cfg.extra_rows:,} rows ..."):
+                t0 = perf_counter()
+                staging.build()
+                pool = staging.extra_tuples()
+            self.console.print(f"[dim]generated dataset in {perf_counter() - t0:.1f} s[/dim]")
             for engine in engines:
                 shape_results[engine.spec.key] = self._run_engine(engine, size, width, staging, pool)
         finally:
             staging.close()
-            for leftover in (staging_path, staging_path.with_name(staging_path.name + ".wal")):
-                leftover.unlink(missing_ok=True)
+            DuckDBEngine.remove_files(staging_path)
         self._print_shape_table(engines, shape_results)
 
     def _run_engine(self, engine: Engine, size: SizeSpec, width: WidthSpec,
@@ -170,7 +167,7 @@ class Runner:
                         if workload.phase == "load":
                             raise
                         record.update({"n": 0, "error": f"{type(exc).__name__}: {exc}"[:500]})
-                        self.console.print(f"[yellow]{label} / {key} failed: {record['error']}[/yellow]")
+                        self.console.print(f"[yellow]{escape(label)} / {key} failed: {escape(record['error'])}[/yellow]")
                         self._recover(ctx)
                     if workload.phase == "cold" or ctx.con is None:
                         ctx.con = engine.connect(ctx.db_path)

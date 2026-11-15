@@ -16,11 +16,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter, perf_counter_ns
 
-from .config import BenchConfig
+from .config import MIN_OPS, BenchConfig
 from .datagen import CATEGORIES, STATUSES, Staging
 from .engines import Engine
 
-MIN_OPS = 20  # never stop an OLTP loop on budget before this many operations
 MIN_REPEATS = 2  # never stop a repeated statement on budget before this many runs
 
 
@@ -101,24 +100,22 @@ def _sql(sql: dict[str, str], engine: Engine) -> str:
 # ---------------------------------------------------------------------------
 # Timing loops
 # ---------------------------------------------------------------------------
-def timed_ops(ctx: Ctx, sql: str, params: list[tuple], warmup: list[tuple] = ()) -> tuple[list[float], int]:
+def timed_ops(ctx: Ctx, sql: str, params: list[tuple], warmup: list[tuple] = ()) -> list[float]:
     """Run one statement per parameter tuple, timing each individually."""
     execute = ctx.con.execute
     for p in warmup:
         execute(sql, p).fetchall()
     budget_ns = int(ctx.cfg.budget_s * 1e9)
     samples: list[int] = []
-    last_rows = 0
     start = perf_counter_ns()
     for p in params:
         t0 = perf_counter_ns()
-        rows = execute(sql, p).fetchall()
+        execute(sql, p).fetchall()
         t1 = perf_counter_ns()
         samples.append(t1 - t0)
-        last_rows = len(rows)
         if t1 - start > budget_ns and len(samples) >= MIN_OPS:
             break
-    return [s / 1e9 for s in samples], last_rows
+    return [s / 1e9 for s in samples]
 
 
 def timed_repeats(
@@ -174,8 +171,7 @@ def oltp_read(key: str, label: str, description: str, sql: str,
         rng = ctx.rng(key)
         warm = [params(ctx, rng) for _ in range(MIN_OPS)]
         plist = [params(ctx, rng) for _ in range(ctx.cfg.oltp_read_ops)]
-        samples, n = timed_ops(ctx, sql, plist, warm)
-        return Outcome(samples, None, None)
+        return Outcome(timed_ops(ctx, sql, plist, warm))
 
     return Workload(key, label, "OLTP", "read", "lookup", description, {"all": sql}, run)
 
@@ -187,7 +183,8 @@ POINT_SELECT_SQL = "SELECT * FROM orders WHERE id = ?"
 
 
 def _run_cold_start(ctx: Ctx) -> Outcome:
-    keys = [ctx.rng("cold").randint(1, ctx.rows) for _ in range(64)]
+    rng = ctx.rng("cold")
+    keys = [rng.randint(1, ctx.rows) for _ in range(64)]
 
     def op(i: int) -> None:
         con = ctx.engine.connect(ctx.db_path)
@@ -238,8 +235,7 @@ OLTP_READS = [
 # ---------------------------------------------------------------------------
 def _run_single_insert(ctx: Ctx) -> Outcome:
     rows = ctx.take_pool(ctx.cfg.oltp_write_ops)
-    samples, _ = timed_ops(ctx, ctx.engine.insert_sql(ctx.width), rows)
-    return Outcome(samples, 1)
+    return Outcome(timed_ops(ctx, ctx.engine.insert_sql(ctx.width), rows), 1)
 
 
 POINT_UPDATE_SQL = "UPDATE orders SET status = ?, quantity = quantity + 1 WHERE id = ?"
@@ -249,13 +245,11 @@ POINT_DELETE_SQL = "DELETE FROM orders WHERE id = ?"
 def _run_point_update(ctx: Ctx) -> Outcome:
     rng = ctx.rng("point_update")
     params = [(rng.choice(STATUSES), i) for i in ctx.write_ids(0)]
-    samples, _ = timed_ops(ctx, POINT_UPDATE_SQL, params)
-    return Outcome(samples, 1)
+    return Outcome(timed_ops(ctx, POINT_UPDATE_SQL, params), 1)
 
 
 def _run_point_delete(ctx: Ctx) -> Outcome:
-    samples, _ = timed_ops(ctx, POINT_DELETE_SQL, [(i,) for i in ctx.write_ids(1)])
-    return Outcome(samples, 1)
+    return Outcome(timed_ops(ctx, POINT_DELETE_SQL, [(i,) for i in ctx.write_ids(1)]), 1)
 
 
 TXN_SQL = (
@@ -342,6 +336,13 @@ def _fetch_rows_n(ctx: Ctx) -> int:
     return min(5000, ctx.rows)
 
 
+def _fetch_rows_range(ctx: Ctx) -> tuple[int, int]:
+    """Id range of exactly ``_fetch_rows_n`` rows, a third of the way in when the table allows it."""
+    n = _fetch_rows_n(ctx)
+    start = min(ctx.rows // 3, ctx.rows - n)
+    return (start + 1, start + n)
+
+
 OLAP_READS = [
     olap_read(
         "agg_full", "Full-table aggregate",
@@ -403,7 +404,7 @@ OLAP_READS = [
         "Materialise 5,000 complete rows (the whole table if it is smaller) as Python tuples with SELECT *. "
         "Row width matters most here.",
         "SELECT *\nFROM orders\nWHERE id BETWEEN ? AND ?",
-        params=lambda ctx: (ctx.rows // 3 + 1, ctx.rows // 3 + _fetch_rows_n(ctx)) if ctx.rows > 5000 else (1, ctx.rows),
+        params=_fetch_rows_range,
         rows_per_op=_fetch_rows_n,
     ),
 ]
