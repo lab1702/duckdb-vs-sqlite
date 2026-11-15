@@ -88,7 +88,7 @@ def test_parse_sizes():
     assert parse_sizes("1e4")[0].label == "10K"
     with pytest.raises(ValueError):
         parse_sizes("small=10")
-    for bad in ("abc", "small=nan", "inf", "1e400", "a=1=2", "1000.9"):
+    for bad in ("abc", "small=nan", "inf", "1e400", "a=1=2", "1000.9", "_1000", "1__000"):
         with pytest.raises(ValueError, match="database size must be a whole number of rows"):
             parse_sizes(bad)
 
@@ -277,7 +277,7 @@ def _tiny_config(**overrides):
 def test_cli_only_must_match_a_workload(tmp_path, capsys):
     assert _run_cli(tmp_path, "--only", "pont_select") == 2
     out = capsys.readouterr().out
-    assert "--only pont_select matches no workload" in out and "dvs list" in out
+    assert "invalid option: --only pont_select matches no workload" in out and "dvs list" in out
     assert not (tmp_path / "out").exists()
 
 
@@ -288,6 +288,14 @@ def test_bulk_delete_never_times_an_empty_delete(tmp_path):
     runner = Runner(cfg, tmp_path / "w", console=Console(quiet=True), only="^bulk_delete$")
     records = runner.run()["results"]
     assert [r["n"] for r in records] == [20, 20]  # one per row width
+
+
+def test_bulk_statements_count_the_rows_the_table_holds_by_then(tmp_path):
+    # batch_insert adds 5 batches of 20 rows to the 300 loaded: each bulk statement covers 1/20 of 400.
+    cfg = _tiny_config(budget_s=60.0)
+    runner = Runner(cfg, tmp_path / "w", console=Console(quiet=True), only="^(batch_insert|bulk_update|bulk_delete)$")
+    records = runner.run()["results"]
+    assert {r["rows_per_op"] for r in records if r["workload"].startswith("bulk_")} == {20.0}
 
 
 def test_unselected_load_and_index_run_once(tmp_path, monkeypatch):

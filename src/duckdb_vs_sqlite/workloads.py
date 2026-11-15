@@ -467,20 +467,27 @@ BULK_DELETE_BUCKETS = 20
 BULK_DELETE_SQL = f"DELETE FROM orders\nWHERE product_id % {BULK_DELETE_BUCKETS} = ?"
 
 
+def _live_rows(ctx: Ctx) -> int:
+    """Rows in the table right now: the write workloads that ran earlier inserted and deleted some."""
+    return ctx.con.execute("SELECT count(*) FROM orders").fetchall()[0][0]
+
+
 def _run_bulk_update(ctx: Ctx) -> Outcome:
     def op(i: int) -> None:
         ctx.con.execute(BULK_UPDATE_SQL, (CATEGORIES[i % len(CATEGORIES)],)).fetchall()
 
-    return Outcome(timed_repeats(ctx, op, warmup=0), ctx.rows / len(CATEGORIES))
+    rows = _live_rows(ctx)
+    return Outcome(timed_repeats(ctx, op, warmup=0), rows / len(CATEGORIES))
 
 
 def _run_bulk_delete(ctx: Ctx) -> Outcome:
     def op(i: int) -> None:
         ctx.con.execute(BULK_DELETE_SQL, (i,)).fetchall()
 
+    rows = _live_rows(ctx)
     # Each run deletes a different bucket; once all are gone a further run would time a no-op.
     repeats = min(ctx.cfg.repeats, BULK_DELETE_BUCKETS)
-    return Outcome(timed_repeats(ctx, op, repeats=repeats, warmup=0), ctx.rows / BULK_DELETE_BUCKETS)
+    return Outcome(timed_repeats(ctx, op, repeats=repeats, warmup=0), rows / BULK_DELETE_BUCKETS)
 
 
 OLAP_WRITES = [

@@ -170,7 +170,7 @@ def parse_sizes(text: str) -> list[SizeSpec]:
         else:
             name, count = "", part
         try:
-            value = float(count.strip().replace("_", ""))
+            value = float(count)  # accepts 1e6 and 1_000_000, ignores surrounding spaces
         except ValueError:
             value = math.nan
         if not value.is_integer():  # not a number, NaN, infinite or fractional
