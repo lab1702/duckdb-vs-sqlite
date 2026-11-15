@@ -127,7 +127,12 @@ def _cmd_run(args: argparse.Namespace, console: Console) -> int:
             engine_keys.append("duckdb-1t")
         overrides["engines"] = _lookup("engine", ENGINES, engine_keys)
         if args.only:
-            re.compile(args.only)
+            from .workloads import WORKLOADS
+
+            only = re.compile(args.only)
+            # A typo would otherwise load every database and then record nothing.
+            if not any(only.search(w.key) for w in WORKLOADS):
+                raise ValueError(f"--only {args.only} matches no workload (see 'dvs list')")
         cfg = make_config(args.preset, **overrides)  # validates the combined configuration
         _check_dirs(args.out, args.workdir)
     except (ValueError, re.error) as exc:

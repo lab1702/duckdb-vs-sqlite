@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
@@ -35,6 +36,7 @@ class Runner:
     def __init__(self, cfg: BenchConfig, workdir: Path, console: Console | None = None,
                  only: str | None = None, keep_data: bool = False):
         self.cfg = cfg
+        self._setup_cfg = replace(cfg, repeats=1)  # for load/index runs nobody records
         self.workdir = workdir
         self.console = console or Console()
         self.only = re.compile(only) if only else None
@@ -153,6 +155,8 @@ class Runner:
                         if workload.phase == "cold":
                             ctx.con = engine.connect(ctx.db_path)
                         continue
+                    # Unselected, they run once: repeating them would only time discarded samples.
+                    ctx.cfg = self.cfg if self._selected(key) else self._setup_cfg
                     record = {"engine": engine.spec.key, "size": size.key, "width": width.key, "workload": key}
                     try:
                         outcome = workload.run(ctx)

@@ -463,7 +463,8 @@ def _run_ctas(ctx: Ctx) -> Outcome:
 
 
 BULK_UPDATE_SQL = "UPDATE orders\nSET amount = round(amount * 1.05, 2), status = 'returned'\nWHERE category = ?"
-BULK_DELETE_SQL = "DELETE FROM orders\nWHERE product_id % 20 = ?"
+BULK_DELETE_BUCKETS = 20
+BULK_DELETE_SQL = f"DELETE FROM orders\nWHERE product_id % {BULK_DELETE_BUCKETS} = ?"
 
 
 def _run_bulk_update(ctx: Ctx) -> Outcome:
@@ -475,9 +476,11 @@ def _run_bulk_update(ctx: Ctx) -> Outcome:
 
 def _run_bulk_delete(ctx: Ctx) -> Outcome:
     def op(i: int) -> None:
-        ctx.con.execute(BULK_DELETE_SQL, (i % 20,)).fetchall()
+        ctx.con.execute(BULK_DELETE_SQL, (i,)).fetchall()
 
-    return Outcome(timed_repeats(ctx, op, warmup=0), ctx.rows / 20)
+    # Each run deletes a different bucket; once all are gone a further run would time a no-op.
+    repeats = min(ctx.cfg.repeats, BULK_DELETE_BUCKETS)
+    return Outcome(timed_repeats(ctx, op, repeats=repeats, warmup=0), ctx.rows / BULK_DELETE_BUCKETS)
 
 
 OLAP_WRITES = [

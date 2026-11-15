@@ -9,8 +9,8 @@ import pytest
 from rich.console import Console
 
 from duckdb_vs_sqlite.cli import main
-from duckdb_vs_sqlite.config import ENGINES, SizeSpec, make_config, parse_sizes
-from duckdb_vs_sqlite.engines import DuckDBEngine
+from duckdb_vs_sqlite.config import ENGINES, SizeSpec, human_rows, make_config, parse_sizes
+from duckdb_vs_sqlite.engines import DuckDBEngine, SqliteEngine
 from duckdb_vs_sqlite.report import PLACEHOLDER, build_dashboard
 from duckdb_vs_sqlite.runner import Runner, save_results
 from duckdb_vs_sqlite.stats import percentile, summarize
@@ -88,6 +88,15 @@ def test_parse_sizes():
     assert parse_sizes("1e4")[0].label == "10K"
     with pytest.raises(ValueError):
         parse_sizes("small=10")
+    for bad in ("abc", "small=nan", "inf", "a=1=2"):
+        with pytest.raises(ValueError, match="database size must be a whole number of rows"):
+            parse_sizes(bad)
+
+
+def test_human_rows_rounds_before_choosing_a_format():
+    assert [human_rows(n) for n in (999, 1_000, 1_500, 999_999, 2_000_000, 999_999_999)] == [
+        "999", "1K", "1.5K", "1000K", "2M", "1000M",
+    ]
 
 
 def test_stats():
@@ -162,7 +171,8 @@ def _run_cli(tmp_path, *argv):
 @pytest.mark.parametrize("argv", [
     ["--repeats", "0"], ["--budget", "-1"], ["--budget", "inf"], ["--oltp-write-ops", "-5"],
     ["--only", "("], ["--rows", "inf"], ["--rows", ""], ["--engines", ","], ["--widths", ","],
-    ["--engines", "nope"], ["--engines", "[/x]"], ["--rows", "a=[/b]"],
+    ["--engines", "nope"], ["--engines", "[/x]"], ["--rows", "a=[/b]"], ["--rows", "abc"],
+    ["--only", "pont_select"], ["--only", "[/b]q"],
 ])
 def test_cli_reports_invalid_options(argv, tmp_path, capsys):
     assert _run_cli(tmp_path, *argv) == 2
@@ -257,3 +267,42 @@ def test_cli_report_with_unwritable_output(results, tmp_path, capsys):
     blocker.write_text("x", encoding="utf-8")
     assert main(["report", str(path), "-o", str(blocker / "d.html"), "--no-open"]) == 2
     assert "cannot write the dashboard" in capsys.readouterr().out
+
+
+def _tiny_config(**overrides):
+    return make_config("quick", **{
+        "sizes": [SizeSpec("small", "Small", 300)], "widths": None, "engines": [ENGINES["sqlite"]],
+        "repeats": 3, "oltp_read_ops": 20, "oltp_write_ops": 20, "batch_rows": 20, "budget_s": 2.0, **overrides,
+    })
+
+
+def test_cli_only_must_match_a_workload(tmp_path, capsys):
+    assert _run_cli(tmp_path, "--only", "pont_select") == 2
+    out = capsys.readouterr().out
+    assert "--only pont_select matches no workload" in out and "dvs list" in out
+
+
+def test_bulk_delete_never_times_an_empty_delete(tmp_path):
+    # 20 runs delete the 20 buckets; a 21st would find nothing and look instant.
+    runner = Runner(_tiny_config(repeats=23), tmp_path / "w", console=Console(quiet=True), only="^bulk_delete$")
+    records = runner.run()["results"]
+    assert [r["n"] for r in records] == [20, 20]  # one per row width
+
+
+def test_unselected_load_and_index_run_once(tmp_path, monkeypatch):
+    loads: list[int] = []
+    original = SqliteEngine.bulk_load_orders
+
+    def counting(self, con, staging):
+        loads.append(1)
+        return original(self, con, staging)
+
+    monkeypatch.setattr(SqliteEngine, "bulk_load_orders", counting)
+    cfg = _tiny_config(widths=None, budget_s=60.0)
+    out = Runner(cfg, tmp_path / "a", console=Console(quiet=True), only="point_select").run()
+    assert len(loads) == len(cfg.widths) and {r["workload"] for r in out["results"]} == {"point_select"}
+
+    loads.clear()
+    out = Runner(cfg, tmp_path / "b", console=Console(quiet=True), only="bulk_load|point_select").run()
+    assert len(loads) == len(cfg.widths) * cfg.repeats  # selected: every repetition is a sample
+    assert {r["n"] for r in out["results"] if r["workload"] == "bulk_load"} == {cfg.repeats}

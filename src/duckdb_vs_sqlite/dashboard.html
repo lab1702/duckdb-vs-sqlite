@@ -424,6 +424,7 @@ function grouped(workloads) {
 }
 /** Ratio of A's time to B's: above 1 means B is faster. */
 function compare(sizeKey, widthKey, wl) {
+  if (state.a === state.b) return null; // a single-engine run has nothing to compare
   const a = val(res(state.a, sizeKey, widthKey, wl)), b = val(res(state.b, sizeKey, widthKey, wl));
   if (a == null || b == null || a <= 0 || b <= 0) return null;
   const ratio = a / b;
@@ -519,6 +520,10 @@ function head(title, sub, right) {
     el('div', null, el('h2', { text: title }), sub ? el('p', { class: 'sub' }, sub) : null),
     right || null);
 }
+/** Why a comparison view is empty: one engine cannot be compared, otherwise the filters hide everything. */
+const noComparison = () => el('div', { class: 'empty', text: run.engines.length < 2
+  ? 'This run measured a single engine. Run at least two (for example --engines sqlite,duckdb) to compare them.'
+  : 'No results match these filters.' });
 const scopeNote = () => el('span', { class: 'scope', text: shapeLabel(sizeOf(state.size), widthOf(state.width)) });
 
 // ---------------------------------------------------------------- header + filters
@@ -578,7 +583,7 @@ function renderTiles() {
       el('div', { class: 't-note', text: `geometric mean of ${cs.length} workload${cs.length > 1 ? 's' : ''}; ${engine(winner).label} wins ${wins}` })));
   }
   const sa = run._sto.get([state.a, state.size, state.width].join('|')), sb = run._sto.get([state.b, state.size, state.width].join('|'));
-  if (sa && sb && sa.bytes && sb.bytes) {
+  if (state.a !== state.b && sa && sb && sa.bytes && sb.bytes) {
     const smaller = sa.bytes <= sb.bytes ? state.a : state.b;
     const factor = Math.max(sa.bytes, sb.bytes) / Math.min(sa.bytes, sb.bytes);
     tiles.append(el('div', { class: 'tile' },
@@ -587,7 +592,7 @@ function renderTiles() {
       el('div', { class: 't-who' }, el('i', { class: 'sw', style: { background: colorOf(smaller) } }), factor < 1.05 ? 'about even' : `${engine(smaller).label} smaller`),
       el('div', { class: 't-note', text: `${engine(state.a).label} ${fmtBytes(sa.bytes)} vs ${engine(state.b).label} ${fmtBytes(sb.bytes)}` })));
   }
-  if (!tiles.children.length) tiles.append(el('div', { class: 'empty', text: 'No results match these filters.' }));
+  if (!tiles.children.length) tiles.append(noComparison());
   host.append(tiles);
 }
 
@@ -599,7 +604,7 @@ function renderSpeedup() {
     `Ratio of ${metricLabel()} times per workload, on a log scale: each gridline is another 10×. Select a row to drill in.`, scopeNote()));
   const groups = grouped(visibleWorkloads());
   const all = groups.flatMap((g) => g.items.map((w) => compare(state.size, state.width, w.key))).filter(Boolean);
-  if (!all.length) { host.append(el('div', { class: 'empty', text: 'No results match these filters.' })); return; }
+  if (!all.length) { host.append(noComparison()); return; }
   const maxLog = Math.max(1, ...all.map((c) => Math.abs(Math.log10(c.ratio))));
   const span = maxLog; // the plot's side margins leave room for the value labels
   const pos = (lg) => 50 + (lg / span) * 50;
@@ -712,9 +717,9 @@ function renderMatrix() {
       return el('div', { class: 'step' }, el('i', { style: { background: col.bg } }), el('span', { text: f === 1 ? 'equal' : (f === 100 ? '≥100×' : f + '×') }));
     })), `${B.label} faster`);
   host.append(head('Every database shape at a glance',
-    `Speed-up for each workload across all size × row-width combinations (${metricLabel()} time). Colour and label name the faster engine. Select a column to switch the filters above, or a cell to drill in.`, scale));
+    `Speed-up for each workload across all size × row-width combinations (${metricLabel()} time). Colour and label name the faster engine. Select a column to switch the filters above, or a cell to drill in.`, state.a === state.b ? null : scale));
   const groups = grouped(visibleWorkloads());
-  if (!groups.length) { host.append(el('div', { class: 'empty', text: 'No results match these filters.' })); return; }
+  if (!groups.length || state.a === state.b) { host.append(noComparison()); return; }
   const sh = shapes();
   const isCur = (x) => x.s.key === state.size && x.w.key === state.width;
   const table = el('table', { class: 'heat' });

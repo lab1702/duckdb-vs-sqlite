@@ -152,7 +152,7 @@ PRESETS: dict[str, BenchConfig] = {
 def human_rows(n: int) -> str:
     for div, suffix in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")):
         if n >= div:
-            v = n / div
+            v = round(n / div, 1)  # round first: 999,999 is "1000K", not "1000.0K"
             return f"{v:.0f}{suffix}" if v == int(v) else f"{v:.1f}{suffix}"
     return str(n)
 
@@ -171,8 +171,8 @@ def parse_sizes(text: str) -> list[SizeSpec]:
             name, count = "", part
         try:
             rows = int(float(count.strip().replace("_", "")))
-        except OverflowError:
-            raise ValueError(f"database size must be a finite number, got {count.strip()}") from None
+        except (ValueError, OverflowError):  # not a number, NaN or infinite
+            raise ValueError(f"database size must be a whole number of rows, got {count.strip()!r}") from None
         key = (name or f"n{rows}").lower().replace(" ", "-")
         label = name.capitalize() if name else human_rows(rows)
         sizes.append(SizeSpec(key, label, rows))
