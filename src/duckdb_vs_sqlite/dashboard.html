@@ -422,9 +422,11 @@ function grouped(workloads) {
   return GROUPS.map(([c, k]) => ({ c, k, label: `${c} · ${k}s`, items: workloads.filter((w) => w.category === c && w.kind === k) }))
     .filter((g) => g.items.length);
 }
+/** A single-engine run: syncState() can only pair the engine with itself, so there is nothing to compare. */
+const solo = () => state.a === state.b;
 /** Ratio of A's time to B's: above 1 means B is faster. */
 function compare(sizeKey, widthKey, wl) {
-  if (state.a === state.b) return null; // a single-engine run has nothing to compare
+  if (solo()) return null;
   const a = val(res(state.a, sizeKey, widthKey, wl)), b = val(res(state.b, sizeKey, widthKey, wl));
   if (a == null || b == null || a <= 0 || b <= 0) return null;
   const ratio = a / b;
@@ -521,7 +523,7 @@ function head(title, sub, right) {
     right || null);
 }
 /** Why a comparison view is empty: one engine cannot be compared, otherwise the filters hide everything. */
-const noComparison = () => el('div', { class: 'empty', text: run.engines.length < 2
+const noComparison = () => el('div', { class: 'empty', text: solo()
   ? 'This run measured a single engine. Run at least two (for example --engines sqlite,duckdb) to compare them.'
   : 'No results match these filters.' });
 const scopeNote = () => el('span', { class: 'scope', text: shapeLabel(sizeOf(state.size), widthOf(state.width)) });
@@ -583,7 +585,7 @@ function renderTiles() {
       el('div', { class: 't-note', text: `geometric mean of ${cs.length} workload${cs.length > 1 ? 's' : ''}; ${engine(winner).label} wins ${wins}` })));
   }
   const sa = run._sto.get([state.a, state.size, state.width].join('|')), sb = run._sto.get([state.b, state.size, state.width].join('|'));
-  if (state.a !== state.b && sa && sb && sa.bytes && sb.bytes) {
+  if (!solo() && sa && sb && sa.bytes && sb.bytes) {
     const smaller = sa.bytes <= sb.bytes ? state.a : state.b;
     const factor = Math.max(sa.bytes, sb.bytes) / Math.min(sa.bytes, sb.bytes);
     tiles.append(el('div', { class: 'tile' },
@@ -711,15 +713,15 @@ function renderMatrix() {
   const host = clear(byId('matrix'));
   const A = engine(state.a), B = engine(state.b);
   const steps = [[A.key, 100], [A.key, 10], [A.key, 3], [null, 1], [B.key, 3], [B.key, 10], [B.key, 100]];
-  const scale = el('div', { class: 'scale' }, `${A.label} faster`,
+  const scale = solo() ? null : el('div', { class: 'scale' }, `${A.label} faster`,
     el('div', { class: 'steps' }, steps.map(([k, f]) => {
       const col = k ? mix(cssVar('--neutral-mid'), cssVar(`--series-${run._slot[k]}`), 0.18 + 0.82 * Math.min(1, Math.log10(f) / 2)) : mix(cssVar('--neutral-mid'), cssVar('--neutral-mid'), 0);
       return el('div', { class: 'step' }, el('i', { style: { background: col.bg } }), el('span', { text: f === 1 ? 'equal' : (f === 100 ? '≥100×' : f + '×') }));
     })), `${B.label} faster`);
   host.append(head('Every database shape at a glance',
-    `Speed-up for each workload across all size × row-width combinations (${metricLabel()} time). Colour and label name the faster engine. Select a column to switch the filters above, or a cell to drill in.`, state.a === state.b ? null : scale));
+    `Speed-up for each workload across all size × row-width combinations (${metricLabel()} time). Colour and label name the faster engine. Select a column to switch the filters above, or a cell to drill in.`, scale));
   const groups = grouped(visibleWorkloads());
-  if (!groups.length || state.a === state.b) { host.append(noComparison()); return; }
+  if (!groups.length || solo()) { host.append(noComparison()); return; }
   const sh = shapes();
   const isCur = (x) => x.s.key === state.size && x.w.key === state.width;
   const table = el('table', { class: 'heat' });
@@ -967,8 +969,8 @@ function renderTable() {
     { key: 'order', label: 'Workload', left: true, get: (w) => order.get(w.key), show: (w) => w.label },
     { key: 'class', label: 'Class', left: true, get: (w) => `${w.category} ${w.kind}`, show: (w) => `${w.category} ${w.kind}` },
     ...run.engines.map((e) => ({ key: 't:' + e.key, label: e.label, sw: e.key, get: (w) => val(cur(e.key, w.key)), show: (w) => { const r = cur(e.key, w.key), v = val(r); return v == null ? (r && r.error ? 'failed' : 'n/a') : fmtTime(v); } })),
-    { key: 'ratio', label: 'Faster', get: (w) => { const c = compare(state.size, state.width, w.key); return c ? Math.log(c.ratio) : null; },
-      show: (w) => { const c = compare(state.size, state.width, w.key); return !c ? 'n/a' : c.factor < 1.05 ? 'equal' : `${engine(c.winner).label} ${fmtFactor(c.factor)}`; } },
+    ...(solo() ? [] : [{ key: 'ratio', label: 'Faster', get: (w) => { const c = compare(state.size, state.width, w.key); return c ? Math.log(c.ratio) : null; },
+      show: (w) => { const c = compare(state.size, state.width, w.key); return !c ? 'n/a' : c.factor < 1.05 ? 'equal' : `${engine(c.winner).label} ${fmtFactor(c.factor)}`; } }]),
     ...run.engines.map((e) => ({ key: 'r:' + e.key, label: `${e.label} per second`, sw: e.key, get: (w) => { const r = cur(e.key, w.key); return r && r.ops_per_s; }, show: (w) => { const r = cur(e.key, w.key); return r && r.ops_per_s ? fmtCount(r.ops_per_s) : 'n/a'; } })),
     { key: 'n', label: 'Samples', get: (w) => { const r = cur(state.a, w.key); return r && r.n; }, show: (w) => run.engines.map((e) => { const r = cur(e.key, w.key); return r && r.n ? r.n.toLocaleString('en-US') : '–'; }).join(' / ') },
   ];

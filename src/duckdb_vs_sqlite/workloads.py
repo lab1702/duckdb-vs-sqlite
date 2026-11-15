@@ -471,7 +471,7 @@ def _run_bulk_update(ctx: Ctx) -> Outcome:
     def op(i: int) -> None:
         ctx.con.execute(BULK_UPDATE_SQL, (CATEGORIES[i % len(CATEGORIES)],)).fetchall()
 
-    return Outcome(timed_repeats(ctx, op, warmup=0), ctx.rows / 20)
+    return Outcome(timed_repeats(ctx, op, warmup=0), ctx.rows / len(CATEGORIES))
 
 
 def _run_bulk_delete(ctx: Ctx) -> Outcome:

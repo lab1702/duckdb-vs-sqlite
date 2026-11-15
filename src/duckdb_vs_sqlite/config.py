@@ -170,9 +170,12 @@ def parse_sizes(text: str) -> list[SizeSpec]:
         else:
             name, count = "", part
         try:
-            rows = int(float(count.strip().replace("_", "")))
-        except (ValueError, OverflowError):  # not a number, NaN or infinite
-            raise ValueError(f"database size must be a whole number of rows, got {count.strip()!r}") from None
+            value = float(count.strip().replace("_", ""))
+        except ValueError:
+            value = math.nan
+        if not value.is_integer():  # not a number, NaN, infinite or fractional
+            raise ValueError(f"database size must be a whole number of rows, got {count.strip()!r}")
+        rows = int(value)
         key = (name or f"n{rows}").lower().replace(" ", "-")
         label = name.capitalize() if name else human_rows(rows)
         sizes.append(SizeSpec(key, label, rows))

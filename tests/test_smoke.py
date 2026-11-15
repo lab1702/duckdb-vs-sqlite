@@ -88,7 +88,7 @@ def test_parse_sizes():
     assert parse_sizes("1e4")[0].label == "10K"
     with pytest.raises(ValueError):
         parse_sizes("small=10")
-    for bad in ("abc", "small=nan", "inf", "a=1=2"):
+    for bad in ("abc", "small=nan", "inf", "1e400", "a=1=2", "1000.9"):
         with pytest.raises(ValueError, match="database size must be a whole number of rows"):
             parse_sizes(bad)
 
@@ -110,10 +110,7 @@ def test_stats():
 def test_workdir_with_other_files_is_left_alone(tmp_path):
     keep = tmp_path / "precious.txt"
     keep.write_text("not a scratch file", encoding="utf-8")
-    cfg = make_config(
-        "quick", sizes=[SizeSpec("small", "Small", 300)], engines=[ENGINES["sqlite"]],
-        repeats=1, oltp_read_ops=20, oltp_write_ops=20, batch_rows=20, budget_s=1.0,
-    )
+    cfg = _tiny_config(repeats=1, budget_s=1.0)
     Runner(cfg, tmp_path, console=Console(quiet=True), only="point_select").run()
     assert [p.name for p in tmp_path.iterdir()] == ["precious.txt"]
 
@@ -172,7 +169,7 @@ def _run_cli(tmp_path, *argv):
     ["--repeats", "0"], ["--budget", "-1"], ["--budget", "inf"], ["--oltp-write-ops", "-5"],
     ["--only", "("], ["--rows", "inf"], ["--rows", ""], ["--engines", ","], ["--widths", ","],
     ["--engines", "nope"], ["--engines", "[/x]"], ["--rows", "a=[/b]"], ["--rows", "abc"],
-    ["--only", "pont_select"], ["--only", "[/b]q"],
+    ["--only", "[/b]q"],
 ])
 def test_cli_reports_invalid_options(argv, tmp_path, capsys):
     assert _run_cli(tmp_path, *argv) == 2
@@ -270,8 +267,9 @@ def test_cli_report_with_unwritable_output(results, tmp_path, capsys):
 
 
 def _tiny_config(**overrides):
+    """One 300-row database on SQLite, both row widths."""
     return make_config("quick", **{
-        "sizes": [SizeSpec("small", "Small", 300)], "widths": None, "engines": [ENGINES["sqlite"]],
+        "sizes": [SizeSpec("small", "Small", 300)], "engines": [ENGINES["sqlite"]],
         "repeats": 3, "oltp_read_ops": 20, "oltp_write_ops": 20, "batch_rows": 20, "budget_s": 2.0, **overrides,
     })
 
@@ -280,11 +278,14 @@ def test_cli_only_must_match_a_workload(tmp_path, capsys):
     assert _run_cli(tmp_path, "--only", "pont_select") == 2
     out = capsys.readouterr().out
     assert "--only pont_select matches no workload" in out and "dvs list" in out
+    assert not (tmp_path / "out").exists()
 
 
 def test_bulk_delete_never_times_an_empty_delete(tmp_path):
     # 20 runs delete the 20 buckets; a 21st would find nothing and look instant.
-    runner = Runner(_tiny_config(repeats=23), tmp_path / "w", console=Console(quiet=True), only="^bulk_delete$")
+    # The budget is generous so that only the bucket count can end the loop, even on a slow disk.
+    cfg = _tiny_config(repeats=23, budget_s=60.0)
+    runner = Runner(cfg, tmp_path / "w", console=Console(quiet=True), only="^bulk_delete$")
     records = runner.run()["results"]
     assert [r["n"] for r in records] == [20, 20]  # one per row width
 
@@ -298,7 +299,7 @@ def test_unselected_load_and_index_run_once(tmp_path, monkeypatch):
         return original(self, con, staging)
 
     monkeypatch.setattr(SqliteEngine, "bulk_load_orders", counting)
-    cfg = _tiny_config(widths=None, budget_s=60.0)
+    cfg = _tiny_config(budget_s=60.0)
     out = Runner(cfg, tmp_path / "a", console=Console(quiet=True), only="point_select").run()
     assert len(loads) == len(cfg.widths) and {r["workload"] for r in out["results"]} == {"point_select"}
 
