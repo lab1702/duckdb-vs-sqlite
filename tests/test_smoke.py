@@ -108,11 +108,13 @@ def test_stats():
 
 
 def test_workdir_with_other_files_is_left_alone(tmp_path):
-    keep = tmp_path / "precious.txt"
-    keep.write_text("not a scratch file", encoding="utf-8")
+    # "staging.duckdb" is a name a user's own database could plausibly have.
+    keep = {"precious.txt": "not a scratch file", "staging.duckdb": "not a scratch database"}
+    for name, text in keep.items():
+        (tmp_path / name).write_text(text, encoding="utf-8")
     cfg = _tiny_config(repeats=1, budget_s=1.0)
     Runner(cfg, tmp_path, console=Console(quiet=True), only="point_select").run()
-    assert [p.name for p in tmp_path.iterdir()] == ["precious.txt"]
+    assert {p.name: p.read_text(encoding="utf-8") for p in tmp_path.iterdir()} == keep
 
 
 def test_cold_start_keys_and_export_range():
@@ -279,6 +281,16 @@ def test_cli_only_must_match_a_workload(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "invalid option: --only pont_select matches no workload" in out and "dvs list" in out
     assert not (tmp_path / "out").exists()
+
+
+def test_few_oltp_write_ops_are_honoured_by_every_write_workload(tmp_path):
+    # The dashboard reports "--oltp-write-ops commits per workload": no workload may run more.
+    cfg = _tiny_config(oltp_write_ops=5, budget_s=60.0)
+    runner = Runner(cfg, tmp_path / "w", console=Console(quiet=True),
+                    only="^(single_insert|point_update|point_delete|txn_mixed)$")
+    records = runner.run()["results"]
+    assert {(r["workload"], r["n"]) for r in records} == {
+        ("single_insert", 5), ("point_update", 5), ("point_delete", 5), ("txn_mixed", 5)}
 
 
 def test_bulk_delete_never_times_an_empty_delete(tmp_path):

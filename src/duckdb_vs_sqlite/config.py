@@ -112,9 +112,8 @@ class BenchConfig:
     @property
     def extra_rows(self) -> int:
         """Rows generated beyond the base table, used as the pool for insert workloads."""
-        # single_insert takes oltp_write_ops rows, txn_mixed at most max(MIN_OPS, oltp_write_ops),
-        # batch_insert five batches.
-        return self.oltp_write_ops + max(MIN_OPS, self.oltp_write_ops) + 5 * self.batch_rows
+        # single_insert takes oltp_write_ops rows, txn_mixed at most as many, batch_insert five batches.
+        return 2 * self.oltp_write_ops + 5 * self.batch_rows
 
     def to_dict(self) -> dict:
         return asdict(self)

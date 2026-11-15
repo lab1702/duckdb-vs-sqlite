@@ -66,8 +66,8 @@ Useful `dvs run` options:
 | Option                      | What it does                                                                     |
 | --------------------------- | -------------------------------------------------------------------------------- |
 | `--preset quick`            | 2K and 50K rows, about half a minute. A sanity check, not a measurement.         |
-| `--preset standard`         | Default. 10K and 1M rows, a few minutes, needs ~2 GB of free disk.              |
-| `--preset full`             | 10K, 250K and 5M rows. Long; the wide 5M-row SQLite file is ~7 GB.               |
+| `--preset standard`         | Default. 10K and 1M rows, a few minutes, peaks at ~3 GB of scratch disk.         |
+| `--preset full`             | 10K, 250K and 5M rows. Long; the wide 5M-row SQLite file is ~7 GB, twice that while it loads. |
 | `--rows small=1e4,large=5e6`| Your own database sizes (any number of them).                                    |
 | `--widths narrow`           | Test only one row width.                                                         |
 | `--duckdb-single-thread`    | Adds "DuckDB (1 thread)" as a third engine: separates parallelism from design.   |

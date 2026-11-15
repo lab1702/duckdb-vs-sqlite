@@ -52,7 +52,8 @@ class Ctx:
 
     @property
     def write_ops(self) -> int:
-        return max(MIN_OPS, min(self.cfg.oltp_write_ops, self.rows // 4))
+        # At most a quarter of the table (MIN_ROWS keeps that at 25 or more), never more than asked for.
+        return min(self.cfg.oltp_write_ops, self.rows // 4)
 
     def write_ids(self, slot: int) -> list[int]:
         """Disjoint sets of existing ids for update (0), delete (1) and transaction (2) workloads."""

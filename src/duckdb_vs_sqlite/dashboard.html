@@ -1045,7 +1045,9 @@ function renderMethod() {
   host.append(el('div', { class: 'block' }, el('h3', { text: 'What the numbers mean' }), el('ul', { class: 'notes' },
     note('Same data, same questions.', 'Both engines load identical generated rows and run the same SQL with the same parameters in the same order (the statements differ only where the dialects do, and both versions are shown in the drill-down). Generating data is never timed.'),
     note('Timed from Python.', 'Every sample covers execute() plus fetchall(): the time until an application holds its answer as Python objects. Driver overhead is included on purpose, and it dominates the smallest operations.'),
-    note('Equal durability.', 'Every commit is flushed to disk on both engines. SQLite is far faster with synchronous=NORMAL or OFF, at the price of losing recent commits in a power cut; rerun with --sqlite-synchronous to see it.'),
+    c.sqlite_synchronous === 'FULL'
+      ? note('Equal durability.', 'Every commit is flushed to disk on both engines. SQLite is far faster with synchronous=NORMAL or OFF, at the price of losing recent commits in a power cut; rerun with --sqlite-synchronous to see it.')
+      : note('Unequal durability.', `This run set SQLite to synchronous=${c.sqlite_synchronous}: DuckDB flushes every commit to disk, SQLite does not and can lose recent commits in a power cut. That favours SQLite in the write workloads, single-row commits above all; rerun without --sqlite-synchronous for an equal comparison.`),
     note('Threads.', 'SQLite runs a query on one thread; DuckDB uses every core unless a single-thread variant was added to the run. Much of an analytical gap on a many-core machine is parallelism.'),
     note('Bulk load vs batch insert.', 'Bulk load uses each engine\'s idiomatic fast path from in-memory data. Batch insert uses the same row-at-a-time executemany() API on both, which is the wrong tool for DuckDB and shows it.'),
     note('Warm cache, one connection.', 'The operating system file cache is warm throughout, including for "open database + first lookup". Nothing here measures concurrent writers or many simultaneous connections.'),

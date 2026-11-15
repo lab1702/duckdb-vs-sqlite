@@ -113,7 +113,8 @@ class Runner:
     def _run_shape(self, size: SizeSpec, width: WidthSpec, engines: list[Engine]) -> None:
         title = f"{size.label} database ({human_rows(size.rows)} rows) x {width.label.lower()}"
         self.console.rule(f"[bold]{escape(title)}")
-        staging_path = self.workdir / "staging.duckdb"
+        # Named like the benchmark databases: --workdir may hold a "staging.duckdb" of the user's.
+        staging_path = self.workdir / "bench-staging.duckdb"
         DuckDBEngine.remove_files(staging_path)  # leftovers of an interrupted run
         staging = Staging(staging_path, size.rows, width.key, self.cfg.extra_rows, self.cfg.seed)
         shape_results: dict[str, dict[str, dict]] = {}
