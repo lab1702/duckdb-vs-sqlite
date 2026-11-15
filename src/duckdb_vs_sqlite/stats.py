@@ -27,6 +27,11 @@ def _r(value: float) -> float:
     return round(value, 9)
 
 
+def _sig(value: float, digits: int = 6) -> float:
+    """Round to significant digits: a rate can be far below 1 (one bulk load every few minutes)."""
+    return float(f"{value:.{digits}g}")
+
+
 def summarize(samples: list[float]) -> dict:
     n = len(samples)
     if n == 0:
@@ -46,7 +51,7 @@ def summarize(samples: list[float]) -> dict:
         "p99": _r(percentile(ordered, 99)),
         "max": _r(ordered[-1]),
         "stdev": _r(stdev),
-        "ops_per_s": round(n / total, 3) if total > 0 else None,
+        "ops_per_s": _sig(n / total) if total > 0 else None,
     }
     if n <= RAW_SAMPLE_LIMIT:
         out["samples"] = [_r(x) for x in samples]  # run order preserved

@@ -107,6 +107,10 @@ def test_stats():
     assert s["n"] == 3 and math.isclose(s["median"], 0.2) and s["samples"] == [0.3, 0.1, 0.2]
     big = summarize([i / 1000 for i in range(1, 501)])
     assert len(big["quantiles"]) == 101 and "samples" not in big
+    # One bulk load every 700 s is a rate far below 1: it must keep its digits, and never round to 0.
+    assert math.isclose(summarize([700.0])["ops_per_s"], 1 / 700, rel_tol=1e-5)
+    assert math.isclose(summarize([5000.0])["ops_per_s"], 1 / 5000, rel_tol=1e-5)
+    assert summarize([0.001, 0.003])["ops_per_s"] == 500.0
 
 
 def test_workdir_with_other_files_is_left_alone(tmp_path):
