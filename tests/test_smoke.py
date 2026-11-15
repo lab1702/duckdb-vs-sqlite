@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+from dataclasses import replace
 
 import pytest
 from rich.console import Console
@@ -16,7 +17,7 @@ from duckdb_vs_sqlite.engines import DuckDBEngine, SqliteEngine
 from duckdb_vs_sqlite.report import PLACEHOLDER, build_dashboard
 from duckdb_vs_sqlite.runner import Runner, save_results
 from duckdb_vs_sqlite.stats import percentile, summarize
-from duckdb_vs_sqlite.workloads import WORKLOADS, Ctx, _fetch_rows_range, _run_cold_start
+from duckdb_vs_sqlite.workloads import BY_KEY, WORKLOADS, Ctx, _fetch_rows_range, _run_cold_start
 
 
 @pytest.fixture(scope="module")
@@ -393,4 +394,25 @@ def test_failed_data_generation_skips_the_shape_and_the_run_goes_on(tmp_path, mo
     assert "disk full" in capsys.readouterr().out
     records = json.loads((tmp_path / "out" / "latest.json").read_text(encoding="utf-8"))["results"]
     assert [(r["width"], r["workload"], r.get("error")) for r in records] == [("narrow", "point_select", None)]
+    assert not (tmp_path / "work").exists()
+
+
+def test_failed_index_build_stops_the_engine_for_that_shape(tmp_path, monkeypatch):
+    # Without the index, "index_lookup" would time a table scan and pass it off as an indexed lookup.
+    create_index = BY_KEY["create_index"]
+
+    def broken(ctx):
+        if ctx.engine.kind == "sqlite":
+            raise OSError("disk full")
+        return create_index.run(ctx)
+
+    monkeypatch.setitem(BY_KEY, "create_index", replace(create_index, run=broken))
+    assert _run_cli(tmp_path, "--rows", "300", "--widths", "narrow",
+                    "--only", "create_index|index_lookup|point_select") == 1
+    saved = json.loads((tmp_path / "out" / "latest.json").read_text(encoding="utf-8"))
+    by_engine = {e: {r["workload"]: r for r in saved["results"] if r["engine"] == e} for e in ("sqlite", "duckdb")}
+    assert set(by_engine["sqlite"]) == {"create_index"} and "disk full" in by_engine["sqlite"]["create_index"]["error"]
+    assert set(by_engine["duckdb"]) == {"create_index", "index_lookup", "point_select"}
+    assert not any(r.get("error") for r in by_engine["duckdb"].values())
+    assert [r["engine"] for r in saved["storage"]] == ["duckdb"]  # no size "after the index build" either
     assert not (tmp_path / "work").exists()

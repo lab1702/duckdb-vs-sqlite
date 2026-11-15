@@ -503,6 +503,15 @@ function logTicks(lo, hi) {
       if (lv >= lo - 1e-9 && lv <= hi + 1e-9) out.push(v);
     }
   }
+  if (out.length < 2) {
+    // The range fits between two 1-2-5 steps (a handful of samples close together): use evenly
+    // spaced round values instead, so the axis is never left without labels.
+    const a = Math.pow(10, lo), b = Math.pow(10, hi), raw = (b - a) / 5;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 5, 10].map((m) => m * mag).find((s) => s >= raw * (1 - 1e-9));
+    out.length = 0;
+    for (let i = Math.ceil(a / step - 1e-9); i * step <= b * (1 + 1e-9); i++) out.push(i * step);
+  }
   return out;
 }
 function decadeDomain(values) {

@@ -192,8 +192,10 @@ class Runner:
                     if self._selected(key):
                         self.results.append(record)
                         out[key] = record
-                    if failed and workload.phase == "load":
-                        # Without the table nothing else can run here; the other engines and shapes still can.
+                    if failed and workload.phase in ("load", "index"):
+                        # Without the table nothing else can run here, and without the index it is not
+                        # the database being compared: lookups by that column would scan the table and
+                        # writes would skip the index upkeep. The other engines and shapes still can run.
                         break
                     if workload.phase == "cold" or ctx.con is None:
                         ctx.con = engine.connect(ctx.db_path)
