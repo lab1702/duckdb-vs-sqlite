@@ -101,6 +101,11 @@ def _print_path(console: Console, label: str, path: Path) -> None:
     console.print(f"{label} {path}", soft_wrap=True, highlight=False, markup=False)
 
 
+def _print_error(console: Console, title: str, detail: str) -> None:
+    # These messages quote paths: like a path on its own line, they are never wrapped.
+    console.print(f"[red]{title}:[/red] {escape(detail)}", soft_wrap=True)
+
+
 def _open(path: Path, no_open: bool) -> None:
     if not no_open:
         try:
@@ -137,7 +142,7 @@ def _cmd_run(args: argparse.Namespace, console: Console) -> int:
         _check_dirs(args.out, args.workdir)
     except (ValueError, re.error) as exc:
         message = f"{_FLAG_OF_FIELD.get(exc.field, exc.field)} {exc.problem}" if isinstance(exc, FieldError) else str(exc)
-        console.print(f"[red]invalid option:[/red] {escape(message)}")
+        _print_error(console, "invalid option", message)
         return 2
 
     runner = Runner(cfg, args.workdir, console=console, only=args.only, keep_data=args.keep_data)
@@ -162,13 +167,13 @@ def _cmd_report(args: argparse.Namespace, console: Console) -> int:
     try:
         runs = [load_results(path) for path in paths]
     except ValueError as exc:
-        console.print(f"[red]invalid results file:[/red] {escape(str(exc))}")
+        _print_error(console, "invalid results file", str(exc))
         return 2
     output = args.output or paths[0].parent / "dashboard.html"
     try:
         dashboard = build_dashboard(runs, output)
     except OSError as exc:
-        console.print(f"[red]cannot write the dashboard:[/red] {escape(f'{output}: {exc.strerror or exc}')}")
+        _print_error(console, "cannot write the dashboard", f"{output}: {exc.strerror or exc}")
         return 2
     _print_path(console, "dashboard:", dashboard)
     _open(dashboard, args.no_open)

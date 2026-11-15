@@ -237,10 +237,14 @@ def test_cli_report_rejects_other_schema_versions(results, tmp_path, capsys):
 
 
 def test_cli_report_names_the_schema_even_when_keys_differ(tmp_path, capsys):
-    path = tmp_path / "future.json"
+    # A path long enough that an 80-column console would wrap the message, wherever tmp_path is.
+    path = tmp_path / ("d" * 60) / "future.json"
+    path.parent.mkdir()
     path.write_text('{"schema_version": 2, "measurements": []}', encoding="utf-8")
     assert main(["report", str(path), "-o", str(tmp_path / "d.html"), "--no-open"]) == 2
-    assert "schema 2" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    # One line: a message that quotes a path is never broken up, so neither the path nor the text is split.
+    assert "schema 2" in out and str(path) in out and out.count("\n") == 1
 
 
 @pytest.mark.parametrize("flag", ["--out", "--workdir"])
