@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "duckdb-vs-sqlite"
+version = "0.1.0"
+description = "Benchmark SQLite against DuckDB (OLTP + OLAP, reads + writes, small + large) and explore the results in an interactive dashboard."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+# Deliberately unpinned: every install resolves to the latest release of each package.
+dependencies = [
+    "duckdb",
+    "pyarrow",
+    "psutil",
+    "rich",
+]
+
+[project.scripts]
+dvs = "duckdb_vs_sqlite.cli:main"
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/duckdb_vs_sqlite"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

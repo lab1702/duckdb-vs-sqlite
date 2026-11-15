@@ -1,0 +1,1072 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DuckDB vs SQLite benchmark</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface-1: #fcfcfb;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --baseline: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --wash: rgba(11,11,11,0.045); --neutral-mid: #f0efec;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+  --series-5: #e87ba4; --series-6: #008300; --series-7: #6250d6; --series-8: #e34948;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
+    --wash: rgba(255,255,255,0.06); --neutral-mid: #383835;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+    --series-5: #d55181; --series-6: #0ca30c; --series-7: #9085e9; --series-8: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface-1: #1a1a19;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
+  --wash: rgba(255,255,255,0.06); --neutral-mid: #383835;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+  --series-5: #d55181; --series-6: #0ca30c; --series-7: #9085e9; --series-8: #e66767;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0; background: var(--page); color: var(--text-primary);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.wrap { max-width: 1240px; margin-inline: auto; padding-inline: 24px; }
+h1 { font-size: 24px; line-height: 1.2; margin: 0; font-weight: 650; }
+h2 { font-size: 16px; margin: 0; font-weight: 650; }
+h3 { font-size: 13px; margin: 0 0 8px; font-weight: 600; color: var(--text-secondary); }
+p { margin: 0; }
+button, select, input { font: inherit; color: inherit; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+
+header.top { padding-block: 28px 14px; display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; }
+.env { color: var(--text-secondary); margin-top: 6px; font-size: 13px; }
+.env b { color: var(--text-primary); font-weight: 600; }
+.btn {
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 12px; cursor: pointer; white-space: nowrap;
+}
+.btn:hover { background: var(--wash); }
+:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+
+/* ---- filter row -------------------------------------------------------- */
+.filters { background: var(--page); border-bottom: 1px solid var(--border); padding: 10px 0; z-index: 20; }
+@media (min-width: 900px) and (min-height: 600px) { .filters { position: sticky; top: 0; } }
+.filters .wrap { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: flex-end; }
+.ctl { border: 0; padding: 0; margin: 0; min-width: 0; }
+.ctl > legend, .ctl > label.cap { display: block; padding: 0; font-size: 11px; color: var(--muted); margin-bottom: 4px; letter-spacing: .02em; }
+.seg { display: inline-flex; flex-wrap: wrap; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
+.seg label { position: relative; cursor: pointer; }
+.seg input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.seg span { display: block; padding: 4px 11px; border-radius: 6px; color: var(--text-secondary); white-space: nowrap; }
+.seg span small { color: var(--muted); font-size: 11.5px; }
+.seg label:hover span { background: var(--wash); }
+.seg input:checked + span { background: var(--text-primary); color: var(--surface-1); }
+.seg input:checked + span small { color: inherit; opacity: .7; }
+.seg input:focus-visible + span { outline: 2px solid var(--series-1); outline-offset: 2px; }
+select.sel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; max-width: 100%; }
+
+/* ---- cards ------------------------------------------------------------- */
+main { padding-block: 20px 60px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
+section { scroll-margin-top: 84px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px 20px 16px; min-width: 0; }
+.card-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
+.sub { color: var(--text-secondary); font-size: 13px; margin-top: 3px; max-width: 78ch; }
+.scope { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.two { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 28px; }
+@media (max-width: 900px) { .two { grid-template-columns: minmax(0, 1fr); } }
+.empty { color: var(--muted); padding: 18px 0; }
+
+/* ---- stat tiles -------------------------------------------------------- */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); gap: 14px; }
+.tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+.tile .t-label { color: var(--text-secondary); font-size: 13px; }
+.tile .t-value { font-size: 30px; font-weight: 650; line-height: 1.15; margin-top: 4px; }
+.tile .t-who { display: flex; align-items: center; gap: 6px; font-weight: 600; margin-top: 2px; }
+.tile .t-note { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.sw.dotk { border-radius: 50%; }
+.sw.linek { height: 2px; width: 14px; border-radius: 1px; }
+
+/* ---- legends ----------------------------------------------------------- */
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--text-secondary); font-size: 12.5px; align-items: center; }
+.legend span.k { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---- row charts (bars, dots) ------------------------------------------- */
+.rows { --label-w: 250px; }
+.rows.tight { --label-w: 180px; }
+.r { display: grid; grid-template-columns: var(--label-w) minmax(0, 1fr); align-items: stretch; min-height: 28px; border-radius: 6px; }
+.r.click { cursor: pointer; }
+.r.click:hover, .r.click:focus-visible, .r.hl { background: var(--wash); }
+.r:focus-visible { outline-offset: -2px; }
+.r-label { align-self: center; padding: 0 12px 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.r-label small { color: var(--muted); }
+.r.focus .r-label { font-weight: 650; }
+.r.group .r-label { align-self: end; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding-bottom: 3px; }
+.r.group { min-height: 30px; }
+.plot { position: relative; min-height: 28px; }
+.plot.pad { margin: 0 74px; }
+.plot.pads { margin: 0 48px; }
+.duel { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px 40px; padding-left: var(--label-w); margin-bottom: 4px; font-size: 12.5px; color: var(--text-secondary); }
+.duel .k { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.gl { position: absolute; top: 0; bottom: 0; width: 1px; margin-left: -0.5px; background: var(--grid); }
+.gl.base { background: var(--baseline); }
+.r.axis { min-height: 22px; }
+.r.axis .plot { min-height: 22px; }
+.tick { position: absolute; bottom: 4px; transform: translateX(-50%); font-size: 11px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.bar { position: absolute; top: 50%; height: 14px; margin-top: -7px; min-width: 2px; }
+.bar.right { border-radius: 0 4px 4px 0; }
+.bar.left { border-radius: 4px 0 0 4px; }
+.val { position: absolute; top: 50%; transform: translateY(-50%); font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.val.na { color: var(--muted); }
+.dot { position: absolute; top: 50%; width: 10px; height: 10px; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 0 2px var(--surface-1); }
+.dot.small { width: 8px; height: 8px; opacity: .8; }
+.conn { position: absolute; top: 50%; height: 2px; margin-top: -1px; background: var(--baseline); }
+.medtick { position: absolute; top: 50%; width: 2px; height: 18px; margin: -9px 0 0 -1px; background: var(--text-primary); border-radius: 1px; }
+.stackbars { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; gap: 2px; }
+.stackbars .bline { position: relative; height: 14px; margin-right: 170px; }
+.stackbars .bar { top: 0; margin-top: 0; left: 0; }
+.stackbars .val { top: 7px; }
+
+/* ---- heatmap ----------------------------------------------------------- */
+.scroll-x { overflow-x: auto; }
+table { border-collapse: separate; border-spacing: 0; width: 100%; }
+.heat { border-spacing: 2px; }
+.heat th { font-weight: 400; text-align: left; }
+.heat thead th { padding: 0 0 4px; vertical-align: bottom; }
+.heat .colbtn { width: 100%; background: none; border: 0; border-bottom: 2px solid transparent; padding: 4px 6px; cursor: pointer; text-align: center; color: var(--text-secondary); line-height: 1.25; border-radius: 6px 6px 0 0; }
+.heat .colbtn:hover { background: var(--wash); }
+.heat .colbtn small { display: block; color: var(--muted); font-size: 11.5px; }
+.heat .cur .colbtn { color: var(--text-primary); font-weight: 650; border-bottom-color: var(--text-primary); }
+.heat tbody th { padding: 0 12px 0 8px; white-space: nowrap; max-width: 250px; overflow: hidden; text-overflow: ellipsis; cursor: pointer; border-radius: 6px; }
+.heat tbody th:hover { background: var(--wash); }
+.heat tr.focus th { font-weight: 650; }
+.heat tr.grp th { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding-top: 10px; cursor: default; background: none; }
+.heat td { padding: 0; min-width: 104px; }
+.heat .cell { display: block; width: 100%; border: 0; border-radius: 4px; padding: 5px 6px; text-align: center; cursor: pointer; font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.heat .cell:hover { filter: brightness(1.08); }
+.heat .cell.na { background: transparent; color: var(--muted); cursor: default; }
+.scale { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); flex-wrap: wrap; }
+.scale .steps { display: flex; gap: 2px; }
+.scale .step { width: clamp(30px, 9vw, 44px); text-align: center; }
+.scale .step i { display: block; height: 10px; border-radius: 2px; }
+.scale .step span { font-size: 11px; color: var(--muted); }
+
+/* ---- detail ------------------------------------------------------------ */
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 2px 0 18px; }
+.chip { font-size: 11.5px; border: 1px solid var(--border); border-radius: 999px; padding: 1px 9px; color: var(--text-secondary); }
+.sqlgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 14px; }
+pre.sql { margin: 0; background: var(--wash); border-radius: 8px; padding: 10px 12px; overflow-x: auto; color: var(--text-primary); white-space: pre; }
+.block { margin-top: 22px; }
+svg text { font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--muted); font-variant-numeric: tabular-nums; }
+svg text.lbl { fill: var(--text-secondary); font-size: 12px; }
+
+/* ---- tables ------------------------------------------------------------ */
+.data th, .data td { padding: 6px 10px; border-bottom: 1px solid var(--grid); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.data th:first-child, .data td:first-child, .data .l { text-align: left; }
+.data thead th { font-weight: 600; color: var(--text-secondary); font-size: 12.5px; border-bottom-color: var(--baseline); background: var(--surface-1); }
+.data thead th button { all: unset; cursor: pointer; display: inline-flex; gap: 4px; align-items: center; }
+.data thead th button:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+.data tbody tr.click { cursor: pointer; }
+.data tbody tr.click:hover { background: var(--wash); }
+.data .k { display: inline-flex; align-items: center; gap: 6px; }
+.data td.mut, .mut { color: var(--muted); }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; margin: 0; }
+.kv dt { color: var(--text-secondary); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.method { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 24px; }
+.notes { margin: 0; padding-left: 18px; color: var(--text-secondary); display: grid; gap: 6px; max-width: 95ch; }
+.notes b { color: var(--text-primary); font-weight: 600; }
+
+/* ---- tooltip ----------------------------------------------------------- */
+#tip {
+  position: fixed; z-index: 50; pointer-events: none; display: none; max-width: 340px;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.18); padding: 10px 12px; font-size: 12.5px;
+}
+#tip .tt { color: var(--text-secondary); margin-bottom: 6px; }
+#tip .tt b { color: var(--text-primary); font-weight: 600; display: block; }
+#tip .trow { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+#tip .trow .tv { font-weight: 650; font-variant-numeric: tabular-nums; }
+#tip .trow .tn { color: var(--text-secondary); }
+#tip .trow .tn small { color: var(--muted); }
+#tip .tf { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--grid); color: var(--text-secondary); }
+
+/* ---- narrow screens (kept last so it overrides the rules above) --------- */
+@media (max-width: 760px) {
+  .rows, .rows.tight { --label-w: 128px; }
+  .plot.pad { margin: 0 58px; }
+  .wrap { padding-inline: 14px; }
+  .card { padding: 16px 14px 14px; }
+  header.top { flex-wrap: wrap; }
+  .stackbars .bline { margin-right: 86px; }
+  .xtra { display: none; }
+}
+@media (max-width: 640px) {
+  /* Too narrow for a label column: put each label on its own line above its plot. */
+  .rows, .rows.tight { --label-w: 0px; }
+  .r { grid-template-columns: minmax(0, 1fr); }
+  .r-label { padding: 6px 4px 0; }
+  .r.group .r-label { padding-top: 12px; }
+  .r.axis > div:first-child { display: none; }
+  .r.group { min-height: 0; }
+  .r.group .plot { display: none; }
+}
+</style>
+</head>
+<body>
+<header class="wrap top">
+  <div>
+    <h1>DuckDB vs SQLite</h1>
+    <p class="env" id="env"></p>
+  </div>
+  <button class="btn" id="theme" type="button">Dark mode</button>
+</header>
+<nav class="filters" aria-label="Filters"><div class="wrap" id="filters"></div></nav>
+<main class="wrap">
+  <section id="summary" aria-label="Summary"></section>
+  <section id="speedup" class="card"></section>
+  <section id="latency" class="card"></section>
+  <section id="matrix" class="card"></section>
+  <section id="detail" class="card"></section>
+  <section id="storage" class="card"></section>
+  <section id="results" class="card"></section>
+  <section id="method" class="card"></section>
+</main>
+<div id="tip" role="tooltip"></div>
+
+<script>window.BENCH_DATA = /*__BENCH_DATA__*/null;</script>
+<script>
+(() => {
+'use strict';
+
+// ---------------------------------------------------------------- helpers
+const byId = (id) => document.getElementById(id);
+function el(tag, props, ...kids) {
+  const n = document.createElement(tag);
+  setProps(n, props);
+  addKids(n, kids);
+  return n;
+}
+function svg(tag, props, ...kids) {
+  const n = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  setProps(n, props);
+  addKids(n, kids);
+  return n;
+}
+function setProps(n, props) {
+  if (!props) return;
+  for (const [k, v] of Object.entries(props)) {
+    if (v == null || v === false) continue;
+    if (k === 'class') n.setAttribute('class', v);
+    else if (k === 'text') n.textContent = v;
+    else if (k === 'style') for (const [p, val] of Object.entries(v)) n.style.setProperty(p, val);
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v === true ? '' : v);
+  }
+}
+function addKids(n, kids) {
+  for (const kid of kids.flat(3)) {
+    if (kid == null || kid === false) continue;
+    n.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+}
+const clear = (n) => { n.replaceChildren(); return n; };
+
+function sig(x, digits = 3, trim = false) {
+  if (!isFinite(x)) return 'n/a';
+  if (x === 0) return '0';
+  const d = Math.min(3, Math.max(0, digits - 1 - Math.floor(Math.log10(Math.abs(x)))));
+  const s = x.toFixed(d);
+  return trim && s.includes('.') ? s.replace(/\.?0+$/, '') : s;
+}
+function fmtTime(s, trim = false) {
+  if (s == null || !isFinite(s)) return 'n/a';
+  if (s < 1e-6) return sig(s * 1e9, 3, trim) + ' ns';
+  if (s < 1e-3) return sig(s * 1e6, 3, trim) + ' µs';
+  if (s < 1) return sig(s * 1e3, 3, trim) + ' ms';
+  if (s < 120) return sig(s, 3, trim) + ' s';
+  return sig(s / 60, 3, trim) + ' min';
+}
+function fmtFactor(f) {
+  if (f == null || !isFinite(f)) return 'n/a';
+  if (f < 1.05) return '≈1×';
+  if (f < 10) return f.toFixed(1) + '×';
+  return Math.round(f).toLocaleString('en-US') + '×';
+}
+function fmtCount(x) {
+  if (x == null || !isFinite(x)) return 'n/a';
+  if (x >= 1e9) return sig(x / 1e9) + 'B';
+  if (x >= 1e6) return sig(x / 1e6) + 'M';
+  if (x >= 1e4) return sig(x / 1e3) + 'K';
+  if (x < 100) return sig(x, 3, true);
+  return Math.round(x).toLocaleString('en-US');
+}
+function fmtRows(n) {
+  for (const [div, suffix] of [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']]) {
+    if (n >= div) return sig(n / div, 3, true) + suffix;
+  }
+  return String(n);
+}
+function fmtBytes(b) {
+  if (b == null) return 'n/a';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (b >= 1024 && i < units.length - 1) { b /= 1024; i++; }
+  return (i === 0 ? Math.round(b) : sig(b)) + ' ' + units[i];
+}
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const plural = (unit) => (unit.endsWith('y') ? unit.slice(0, -1) + 'ies' : unit.endsWith('ch') ? unit + 'es' : unit + 's');
+const geomean = (xs) => Math.exp(xs.reduce((a, x) => a + Math.log(x), 0) / xs.length);
+
+// OKLab mixing for the diverging heatmap scale.
+function hexToRgb(hex) {
+  hex = hex.trim().replace('#', '');
+  if (hex.length === 3) hex = [...hex].map((c) => c + c).join('');
+  return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+}
+const toLin = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+const toSrgb = (c) => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
+function rgbToOklab([r, g, b]) {
+  r = toLin(r); g = toLin(g); b = toLin(b);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return [0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+          1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+          0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s];
+}
+function oklabToRgb([L, a, b]) {
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+  return [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+          -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+          -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s].map((c) => Math.min(1, Math.max(0, toSrgb(c))));
+}
+function mix(hexA, hexB, t) {
+  const A = rgbToOklab(hexToRgb(hexA)), B = rgbToOklab(hexToRgb(hexB));
+  const rgb = oklabToRgb(A.map((v, i) => v + (B[i] - v) * t));
+  const lum = 0.2126 * toLin(rgb[0]) + 0.7152 * toLin(rgb[1]) + 0.0722 * toLin(rgb[2]);
+  const onWhite = 1.05 / (lum + 0.05), onInk = (lum + 0.05) / 0.0536;
+  return { bg: `rgb(${rgb.map((c) => Math.round(c * 255)).join(' ')})`, ink: onWhite >= onInk ? '#ffffff' : '#0b0b0b' };
+}
+const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+// ---------------------------------------------------------------- data
+const DATA = window.BENCH_DATA;
+if (!DATA || !Array.isArray(DATA.runs) || !DATA.runs.length) {
+  byId('env').textContent = 'No benchmark results are embedded in this file. Generate it with: dvs run';
+  return;
+}
+const GROUPS = [['OLTP', 'read'], ['OLTP', 'write'], ['OLAP', 'read'], ['OLAP', 'write']];
+const METRICS = [
+  ['median', 'Median'], ['mean', 'Mean'], ['p95', 'p95'], ['p99', 'p99'], ['min', 'Best'],
+];
+const FIXED_SLOTS = { sqlite: 1, duckdb: 2, 'duckdb-1t': 3 };
+
+for (const run of DATA.runs) {
+  run._idx = new Map(run.results.map((r) => [[r.engine, r.size, r.width, r.workload].join('|'), r]));
+  run._sto = new Map((run.storage || []).map((s) => [[s.engine, s.size, s.width].join('|'), s]));
+  const present = new Set(run.results.map((r) => r.workload));
+  run._workloads = run.workloads.filter((w) => present.has(w.key));
+  // Colour follows the engine, never its position in the list.
+  let next = 4;
+  run._slot = {};
+  for (const e of run.engines) run._slot[e.key] = FIXED_SLOTS[e.key] || Math.min(8, next++);
+  run._engine = new Map(run.engines.map((e) => [e.key, e]));
+}
+
+const state = { run: 0, size: null, width: null, cls: 'all', op: 'all', metric: 'median', a: null, b: null, focus: null, sort: { key: 'order', dir: 1 } };
+let run = DATA.runs[0];
+
+function syncState() {
+  run = DATA.runs[state.run];
+  const has = (list, key) => list.some((x) => x.key === key);
+  if (!has(run.sizes, state.size)) state.size = run.sizes[run.sizes.length - 1].key;
+  if (!has(run.widths, state.width)) state.width = run.widths[0].key;
+  if (!has(run.engines, state.a)) state.a = run.engines[0].key;
+  if (!has(run.engines, state.b) || state.b === state.a) {
+    state.b = (run.engines.find((e) => e.key !== state.a) || run.engines[0]).key;
+  }
+  if (!run._workloads.some((w) => w.key === state.focus)) {
+    state.focus = (run._workloads.find((w) => w.key === 'group_low') || run._workloads[0] || {}).key;
+  }
+}
+const colorOf = (engineKey) => `var(--series-${run._slot[engineKey] || 8})`;
+const engine = (key) => run._engine.get(key);
+const sizeOf = (key) => run.sizes.find((s) => s.key === key);
+const widthOf = (key) => run.widths.find((w) => w.key === key);
+const widthShort = (w) => w.label.replace(/\s*rows$/i, '');
+const shapeLabel = (s, w) => `${s.label} (${fmtRows(s.rows)} rows) · ${widthShort(w).toLowerCase()}`;
+const metricLabel = () => METRICS.find((m) => m[0] === state.metric)[1].toLowerCase();
+const res = (e, s, w, wl) => run._idx.get([e, s, w, wl].join('|'));
+const val = (r) => (r && !r.error && r.n > 0 && isFinite(r[state.metric]) ? r[state.metric] : null);
+const cur = (e, wl) => res(e, state.size, state.width, wl);
+const shapes = () => run.sizes.flatMap((s) => run.widths.map((w) => ({ s, w })));
+function visibleWorkloads() {
+  return run._workloads.filter((w) => (state.cls === 'all' || w.category === state.cls) && (state.op === 'all' || w.kind === state.op));
+}
+function grouped(workloads) {
+  return GROUPS.map(([c, k]) => ({ c, k, label: `${c} · ${k}s`, items: workloads.filter((w) => w.category === c && w.kind === k) }))
+    .filter((g) => g.items.length);
+}
+/** Ratio of A's time to B's: above 1 means B is faster. */
+function compare(sizeKey, widthKey, wl) {
+  const a = val(res(state.a, sizeKey, widthKey, wl)), b = val(res(state.b, sizeKey, widthKey, wl));
+  if (a == null || b == null || a <= 0 || b <= 0) return null;
+  const ratio = a / b;
+  return { a, b, ratio, winner: ratio >= 1 ? state.b : state.a, factor: ratio >= 1 ? ratio : 1 / ratio };
+}
+
+// ---------------------------------------------------------------- tooltip
+const tip = byId('tip');
+function showTip(content, x, y) {
+  clear(tip).append(content);
+  tip.style.display = 'block';
+  const r = tip.getBoundingClientRect();
+  let left = x + 14, top = y + 14;
+  if (left + r.width > innerWidth - 8) left = Math.max(8, x - r.width - 14);
+  if (top + r.height > innerHeight - 8) top = Math.max(8, y - r.height - 14);
+  tip.style.left = left + 'px';
+  tip.style.top = top + 'px';
+}
+const hideTip = () => { tip.style.display = 'none'; };
+function tipBox(title, subtitle, rows, footer) {
+  return el('div', null,
+    el('div', { class: 'tt' }, el('b', { text: title }), subtitle),
+    rows.map((r) => el('div', { class: 'trow' },
+      el('i', { class: 'sw linek', style: { background: r.color || 'transparent' } }),
+      el('span', { class: 'tn' }, r.label, r.note ? el('small', { text: ' ' + r.note }) : null),
+      el('span', { class: 'tv', text: r.value }))),
+    footer ? el('div', { class: 'tf', text: footer }) : null);
+}
+/** Hover + keyboard-focus tooltip, optional click/Enter action. */
+function interactive(node, makeTip, onClick) {
+  node.addEventListener('pointermove', (e) => showTip(makeTip(), e.clientX, e.clientY));
+  node.addEventListener('pointerleave', hideTip);
+  node.addEventListener('focus', () => { const r = node.getBoundingClientRect(); showTip(makeTip(), r.left + Math.min(r.width / 2, 260), r.bottom - 8); });
+  node.addEventListener('blur', hideTip);
+  if (!node.hasAttribute('tabindex') && node.tagName !== 'BUTTON') node.setAttribute('tabindex', '0');
+  if (onClick) {
+    node.addEventListener('click', onClick);
+    if (node.tagName !== 'BUTTON') {
+      node.setAttribute('role', 'button');
+      node.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } });
+    }
+  }
+  return node;
+}
+function workloadTip(wl, sizeKey, widthKey) {
+  const s = sizeOf(sizeKey), w = widthOf(widthKey);
+  const rows = run.engines.map((e) => {
+    const r = res(e.key, sizeKey, widthKey, wl.key), v = val(r);
+    const rate = r && r.rows_per_s ? `${fmtCount(r.rows_per_s)} rows/s` : (r && r.ops_per_s ? `${fmtCount(r.ops_per_s)}/s` : '');
+    return { color: colorOf(e.key), label: e.label, note: v == null ? '' : rate, value: v == null ? (r && r.error ? 'failed' : 'n/a') : fmtTime(v) };
+  });
+  const c = compare(sizeKey, widthKey, wl.key);
+  const footer = c ? (c.factor < 1.05 ? 'About the same' : `${engine(c.winner).label} is ${fmtFactor(c.factor)} faster`) + ` (${metricLabel()} time per ${wl.unit})` : null;
+  return tipBox(wl.label, shapeLabel(s, w), rows, footer);
+}
+function focusWorkload(key, scroll = true) {
+  state.focus = key;
+  render();
+  if (scroll) byId('detail').scrollIntoView({ block: 'start' });
+}
+
+// ---------------------------------------------------------------- scales
+function logTicks(lo, hi) {
+  // lo/hi are log10 bounds; returns tick values, adding 2x and 5x steps on short ranges.
+  const out = [];
+  const fine = hi - lo <= 1.6;
+  for (let k = Math.floor(lo); k <= Math.ceil(hi); k++) {
+    for (const m of fine ? [1, 2, 5] : [1]) {
+      const v = m * Math.pow(10, k), lv = Math.log10(v);
+      if (lv >= lo - 1e-9 && lv <= hi + 1e-9) out.push(v);
+    }
+  }
+  return out;
+}
+function decadeDomain(values) {
+  let lo = Math.floor(Math.log10(Math.min(...values)) + 1e-9), hi = Math.ceil(Math.log10(Math.max(...values)) - 1e-9);
+  if (hi <= lo) hi = lo + 1;
+  return [lo, hi];
+}
+function thin(ticks, max) {
+  if (ticks.length <= max) return ticks;
+  const step = Math.ceil(ticks.length / max);
+  return ticks.filter((_, i) => i % step === 0);
+}
+const gridlines = (positions, baseAt) => positions.map((p) => el('i', { class: 'gl' + (p === baseAt ? ' base' : ''), style: { left: p + '%' } }));
+
+function legend(kind) {
+  return el('div', { class: 'legend' }, run.engines.map((e) =>
+    el('span', { class: 'k' }, el('i', { class: 'sw ' + kind, style: { background: colorOf(e.key) } }), e.label)));
+}
+function head(title, sub, right) {
+  return el('div', { class: 'card-head' },
+    el('div', null, el('h2', { text: title }), sub ? el('p', { class: 'sub' }, sub) : null),
+    right || null);
+}
+const scopeNote = () => el('span', { class: 'scope', text: shapeLabel(sizeOf(state.size), widthOf(state.width)) });
+
+// ---------------------------------------------------------------- header + filters
+function renderHeader() {
+  const s = run.system;
+  const when = new Date(run.started_at);
+  clear(byId('env')).append(
+    el('b', { text: `DuckDB ${s.duckdb}` }), ' vs ', el('b', { text: `SQLite ${s.sqlite}` }),
+    ` · ${s.python} · ${s.os} · ${s.cpu} (${s.cores_logical} threads, ${s.ram_gb} GB RAM) · run ${isNaN(when) ? run.started_at : when.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`);
+}
+function segmented(id, caption, options, current, onChange) {
+  return el('fieldset', { class: 'ctl' }, el('legend', { text: caption }),
+    el('div', { class: 'seg' }, options.map((o) => el('label', { title: o.title },
+      el('input', { type: 'radio', name: id, id: `${id}-${o.value}`, value: o.value, checked: o.value === current,
+        onchange: () => { onChange(o.value); render(); } }),
+      el('span', null, o.label, o.small ? [' ', el('small', { text: o.small })] : null)))));
+}
+function dropdown(id, caption, options, current, onChange) {
+  return el('div', { class: 'ctl' }, el('label', { class: 'cap', for: id, text: caption }),
+    el('select', { class: 'sel', id, onchange: (e) => { onChange(e.target.value); render(); } },
+      options.map((o) => el('option', { value: o.value, selected: String(o.value) === String(current), text: o.label }))));
+}
+function renderFilters() {
+  const host = clear(byId('filters'));
+  if (DATA.runs.length > 1) {
+    host.append(dropdown('f-run', 'Run', DATA.runs.map((r, i) => ({ value: i, label: `${r.system.os_family} · ${r.system.cpu} · ${r.run_id}` })),
+      state.run, (v) => { state.run = Number(v); syncState(); }));
+  }
+  host.append(
+    segmented('f-size', 'Database size', run.sizes.map((s) => ({ value: s.key, label: s.label, small: fmtRows(s.rows) + ' rows' })), state.size, (v) => { state.size = v; }),
+    segmented('f-width', 'Row width', run.widths.map((w) => ({ value: w.key, label: widthShort(w), small: `${w.columns} cols`, title: w.description })), state.width, (v) => { state.width = v; }),
+    segmented('f-cls', 'Workload', [{ value: 'all', label: 'All' }, { value: 'OLTP', label: 'OLTP' }, { value: 'OLAP', label: 'OLAP' }], state.cls, (v) => { state.cls = v; }),
+    segmented('f-op', 'Operation', [{ value: 'all', label: 'All' }, { value: 'read', label: 'Read' }, { value: 'write', label: 'Write' }], state.op, (v) => { state.op = v; }),
+    segmented('f-metric', 'Statistic', METRICS.map(([value, label]) => ({ value, label })), state.metric, (v) => { state.metric = v; }));
+  if (run.engines.length > 2) {
+    const opts = run.engines.map((e) => ({ value: e.key, label: e.label }));
+    host.append(
+      dropdown('f-a', 'Compare', opts, state.a, (v) => { if (v === state.b) state.b = state.a; state.a = v; }),
+      dropdown('f-b', 'against', opts, state.b, (v) => { if (v === state.a) state.a = state.b; state.b = v; }));
+  }
+}
+
+// ---------------------------------------------------------------- summary tiles
+function renderTiles() {
+  const host = clear(byId('summary'));
+  const tiles = el('div', { class: 'tiles' });
+  for (const g of grouped(visibleWorkloads())) {
+    const cs = g.items.map((w) => compare(state.size, state.width, w.key)).filter(Boolean);
+    if (!cs.length) continue;
+    const gm = geomean(cs.map((c) => c.ratio));
+    const winner = gm >= 1 ? state.b : state.a, factor = gm >= 1 ? gm : 1 / gm;
+    const wins = cs.filter((c) => c.winner === winner).length;
+    tiles.append(el('div', { class: 'tile' },
+      el('div', { class: 't-label', text: `${g.c} ${g.k}s` }),
+      el('div', { class: 't-value', text: fmtFactor(factor) }),
+      el('div', { class: 't-who' }, el('i', { class: 'sw', style: { background: colorOf(winner) } }), factor < 1.05 ? 'about even' : `${engine(winner).label} faster`),
+      el('div', { class: 't-note', text: `geometric mean of ${cs.length} workload${cs.length > 1 ? 's' : ''}; ${engine(winner).label} wins ${wins}` })));
+  }
+  const sa = run._sto.get([state.a, state.size, state.width].join('|')), sb = run._sto.get([state.b, state.size, state.width].join('|'));
+  if (sa && sb && sa.bytes && sb.bytes) {
+    const smaller = sa.bytes <= sb.bytes ? state.a : state.b;
+    const factor = Math.max(sa.bytes, sb.bytes) / Math.min(sa.bytes, sb.bytes);
+    tiles.append(el('div', { class: 'tile' },
+      el('div', { class: 't-label', text: 'Size on disk' }),
+      el('div', { class: 't-value', text: fmtFactor(factor) }),
+      el('div', { class: 't-who' }, el('i', { class: 'sw', style: { background: colorOf(smaller) } }), factor < 1.05 ? 'about even' : `${engine(smaller).label} smaller`),
+      el('div', { class: 't-note', text: `${engine(state.a).label} ${fmtBytes(sa.bytes)} vs ${engine(state.b).label} ${fmtBytes(sb.bytes)}` })));
+  }
+  if (!tiles.children.length) tiles.append(el('div', { class: 'empty', text: 'No results match these filters.' }));
+  host.append(tiles);
+}
+
+// ---------------------------------------------------------------- speed-up chart
+function renderSpeedup() {
+  const host = clear(byId('speedup'));
+  const A = engine(state.a), B = engine(state.b);
+  host.append(head('Who is faster, and by how much',
+    `Ratio of ${metricLabel()} times per workload, on a log scale: each gridline is another 10×. Select a row to drill in.`, scopeNote()));
+  const groups = grouped(visibleWorkloads());
+  const all = groups.flatMap((g) => g.items.map((w) => compare(state.size, state.width, w.key))).filter(Boolean);
+  if (!all.length) { host.append(el('div', { class: 'empty', text: 'No results match these filters.' })); return; }
+  const maxLog = Math.max(1, ...all.map((c) => Math.abs(Math.log10(c.ratio))));
+  const span = maxLog; // the plot's side margins leave room for the value labels
+  const pos = (lg) => 50 + (lg / span) * 50;
+  const tickLogs = [];
+  for (let k = 0; k <= Math.floor(span + 1e-9); k++) { tickLogs.push(k); if (k) tickLogs.unshift(-k); }
+  const grid = () => gridlines(tickLogs.map(pos), 50);
+
+  const rows = el('div', { class: 'rows' });
+  rows.append(el('div', { class: 'duel' },
+    el('span', { class: 'k' }, el('i', { class: 'sw', style: { background: colorOf(A.key) } }), `◀ ${A.label} faster`),
+    el('span', { class: 'k' }, `${B.label} faster ▶`, el('i', { class: 'sw', style: { background: colorOf(B.key) } }))));
+  rows.append(el('div', { class: 'r axis' }, el('div'),
+    el('div', { class: 'plot pads' },
+      tickLogs.map((lg) => el('span', { class: 'tick', style: { left: pos(lg) + '%' }, text: lg === 0 ? 'equal' : `${Math.pow(10, Math.abs(lg)).toLocaleString('en-US')}×` })))));
+  for (const g of groups) {
+    rows.append(el('div', { class: 'r group' }, el('div', { class: 'r-label', text: g.label }), el('div', { class: 'plot pads' }, grid())));
+    for (const w of g.items) {
+      const c = compare(state.size, state.width, w.key);
+      const plot = el('div', { class: 'plot pads' }, grid());
+      if (c) {
+        const lg = Math.log10(c.ratio), width = Math.abs(pos(lg) - 50);
+        const right = lg >= 0;
+        plot.append(
+          el('i', { class: 'bar ' + (right ? 'right' : 'left'), style: { [right ? 'left' : 'right']: '50%', width: width + '%', background: colorOf(c.winner) } }),
+          el('span', { class: 'val', style: { [right ? 'left' : 'right']: `calc(${50 + width}% + 6px)` }, text: fmtFactor(c.factor) }));
+      } else {
+        plot.append(el('span', { class: 'val na', style: { left: 'calc(50% + 6px)' }, text: 'no data' }));
+      }
+      const row = el('div', { class: 'r click' + (w.key === state.focus ? ' focus' : '') }, el('div', { class: 'r-label', text: w.label }), plot);
+      interactive(row, () => workloadTip(w, state.size, state.width), () => focusWorkload(w.key));
+      rows.append(row);
+    }
+  }
+  host.append(rows);
+}
+
+// ---------------------------------------------------------------- dot (dumbbell) chart
+/** rows: [{label, small, values: [{engine, v}], tip, onClick, focus, hl}] */
+function dotChart(rows, opts = {}) {
+  const values = rows.flatMap((r) => (r.values || []).map((x) => x.v)).filter((v) => v != null && v > 0);
+  if (!values.length) return el('div', { class: 'empty', text: 'No results match these filters.' });
+  const [lo, hi] = decadeDomain(values);
+  const pos = (v) => ((Math.log10(v) - lo) / (hi - lo)) * 100;
+  const ticks = thin(logTicks(lo, hi), 9);
+  const fmt = opts.format || ((v) => fmtTime(v));
+  const grid = () => gridlines(ticks.map(pos));
+  const out = el('div', { class: 'rows' + (opts.tight ? ' tight' : '') });
+  out.append(el('div', { class: 'r axis' }, el('div'),
+    el('div', { class: 'plot pad' }, ticks.map((t) => el('span', { class: 'tick', style: { left: pos(t) + '%' }, text: (opts.tickFormat || ((v) => fmtTime(v, true)))(t) })))));
+  for (const r of rows) {
+    if (r.group) {
+      out.append(el('div', { class: 'r group' }, el('div', { class: 'r-label', text: r.group }), el('div', { class: 'plot pad' }, grid())));
+      continue;
+    }
+    const plot = el('div', { class: 'plot pad' }, grid());
+    const pts = r.values.filter((x) => x.v != null && x.v > 0).sort((p, q) => p.v - q.v);
+    if (pts.length) {
+      const first = pts[0], last = pts[pts.length - 1];
+      if (pts.length > 1) {
+        plot.append(el('i', { class: 'conn', style: { left: pos(first.v) + '%', width: (pos(last.v) - pos(first.v)) + '%' } }));
+        plot.append(el('span', { class: 'val', style: { right: `calc(${100 - pos(first.v)}% + 11px)` }, text: fmt(first.v) }));
+      }
+      plot.append(el('span', { class: 'val', style: { left: `calc(${pos(last.v)}% + 11px)` }, text: fmt(last.v) }));
+      // Slowest first, so the fastest engine's dot sits on top where two overlap.
+      for (const p of [...pts].reverse()) plot.append(el('i', { class: 'dot', style: { left: pos(p.v) + '%', background: colorOf(p.engine) } }));
+    } else {
+      plot.append(el('span', { class: 'val na', style: { left: '6px' }, text: 'no data' }));
+    }
+    const row = el('div', { class: 'r' + (r.onClick ? ' click' : '') + (r.focus ? ' focus' : '') + (r.hl ? ' hl' : '') },
+      el('div', { class: 'r-label' }, r.label, r.small ? el('small', { text: ' ' + r.small }) : null), plot);
+    if (r.tip) interactive(row, r.tip, r.onClick);
+    out.append(row);
+  }
+  return out;
+}
+function renderLatency() {
+  const host = clear(byId('latency'));
+  host.append(head('Absolute time per operation',
+    `${cap(metricLabel())} time for one unit of each workload on a shared log axis, so microsecond lookups and multi-second scans fit on one chart. Further left is faster.`,
+    el('div', null, scopeNote(), legend('dotk'))));
+  const rows = [];
+  for (const g of grouped(visibleWorkloads())) {
+    rows.push({ group: g.label });
+    for (const w of g.items) {
+      rows.push({
+        label: w.label, focus: w.key === state.focus,
+        values: run.engines.map((e) => ({ engine: e.key, v: val(cur(e.key, w.key)) })),
+        tip: () => workloadTip(w, state.size, state.width), onClick: () => focusWorkload(w.key),
+      });
+    }
+  }
+  host.append(rows.length ? dotChart(rows) : el('div', { class: 'empty', text: 'No results match these filters.' }));
+}
+
+// ---------------------------------------------------------------- heatmap
+function heatColor(c) {
+  if (!c) return null;
+  const lg = Math.abs(Math.log10(c.ratio));
+  if (c.factor < 1.05) return mix(cssVar('--neutral-mid'), cssVar('--neutral-mid'), 0);
+  const t = 0.18 + 0.82 * Math.min(1, lg / 2); // full colour at 100x
+  return mix(cssVar('--neutral-mid'), cssVar(`--series-${run._slot[c.winner]}`), t);
+}
+function renderMatrix() {
+  const host = clear(byId('matrix'));
+  const A = engine(state.a), B = engine(state.b);
+  const steps = [[A.key, 100], [A.key, 10], [A.key, 3], [null, 1], [B.key, 3], [B.key, 10], [B.key, 100]];
+  const scale = el('div', { class: 'scale' }, `${A.label} faster`,
+    el('div', { class: 'steps' }, steps.map(([k, f]) => {
+      const col = k ? mix(cssVar('--neutral-mid'), cssVar(`--series-${run._slot[k]}`), 0.18 + 0.82 * Math.min(1, Math.log10(f) / 2)) : mix(cssVar('--neutral-mid'), cssVar('--neutral-mid'), 0);
+      return el('div', { class: 'step' }, el('i', { style: { background: col.bg } }), el('span', { text: f === 1 ? 'equal' : (f === 100 ? '≥100×' : f + '×') }));
+    })), `${B.label} faster`);
+  host.append(head('Every database shape at a glance',
+    `Speed-up for each workload across all size × row-width combinations (${metricLabel()} time). Colour and label name the faster engine. Select a column to switch the filters above, or a cell to drill in.`, scale));
+  const groups = grouped(visibleWorkloads());
+  if (!groups.length) { host.append(el('div', { class: 'empty', text: 'No results match these filters.' })); return; }
+  const sh = shapes();
+  const isCur = (x) => x.s.key === state.size && x.w.key === state.width;
+  const table = el('table', { class: 'heat' });
+  table.append(el('thead', null, el('tr', null, el('th', { scope: 'col' }, el('span', { class: 'mut', text: 'Workload' })),
+    sh.map((x) => el('th', { scope: 'col', class: isCur(x) ? 'cur' : null },
+      el('button', { class: 'colbtn', type: 'button', id: `col-${x.s.key}-${x.w.key}`, 'aria-pressed': String(isCur(x)),
+        onclick: () => { state.size = x.s.key; state.width = x.w.key; render(); } },
+        `${x.s.label} · ${widthShort(x.w).toLowerCase()}`, el('small', { text: `${fmtRows(x.s.rows)} rows × ${x.w.columns} cols` })))))));
+  const body = el('tbody');
+  for (const g of groups) {
+    body.append(el('tr', { class: 'grp' }, el('th', { scope: 'rowgroup', colspan: sh.length + 1, text: g.label })));
+    for (const w of g.items) {
+      const tr = el('tr', { class: w.key === state.focus ? 'focus' : null });
+      const th = el('th', { scope: 'row', text: w.label, title: w.description });
+      th.addEventListener('click', () => focusWorkload(w.key));
+      tr.append(th);
+      for (const x of sh) {
+        const c = compare(x.s.key, x.w.key, w.key);
+        if (!c) { tr.append(el('td', null, el('span', { class: 'cell na', text: 'n/a' }))); continue; }
+        const col = heatColor(c);
+        const text = c.factor < 1.05 ? 'equal' : `${engine(c.winner).short} ${fmtFactor(c.factor)}`;
+        const cell = el('button', { class: 'cell', type: 'button', style: { background: col.bg, color: col.ink }, text });
+        interactive(cell, () => workloadTip(w, x.s.key, x.w.key), () => { state.size = x.s.key; state.width = x.w.key; focusWorkload(w.key); });
+        tr.append(el('td', null, cell));
+      }
+      body.append(tr);
+    }
+  }
+  table.append(body);
+  host.append(el('div', { class: 'scroll-x' }, table));
+}
+
+// ---------------------------------------------------------------- drill-down
+function quantilesOf(r) {
+  if (!r || r.error || !r.n) return null;
+  if (r.quantiles) return r.quantiles;
+  const s = [...(r.samples || [])].sort((a, b) => a - b);
+  if (!s.length) return null;
+  return Array.from({ length: 101 }, (_, p) => {
+    const rank = (s.length - 1) * p / 100, lo = Math.floor(rank), hi = Math.ceil(rank);
+    return s[lo] + (s[hi] - s[lo]) * (rank - lo);
+  });
+}
+function percentileChart(host, series) {
+  // series: [{engine, q: number[101]}]
+  const W = Math.max(240, host.clientWidth || 600), H = 250, m = { l: 62, r: 16, t: 10, b: 34 };
+  const all = series.flatMap((s) => s.q).filter((v) => v > 0);
+  let lo = Math.log10(Math.min(...all)), hi = Math.log10(Math.max(...all));
+  const padLog = Math.max(0.04, (hi - lo) * 0.06); lo -= padLog; hi += padLog;
+  const x = (p) => m.l + (p / 100) * (W - m.l - m.r);
+  const y = (v) => m.t + (1 - (Math.log10(v) - lo) / (hi - lo)) * (H - m.t - m.b);
+  const root = svg('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Latency by percentile for each engine' });
+  for (const t of thin(logTicks(lo, hi), 7)) {
+    root.append(svg('line', { x1: m.l, x2: W - m.r, y1: y(t), y2: y(t), stroke: 'var(--grid)', 'stroke-width': 1 }),
+      svg('text', { x: m.l - 8, y: y(t) + 4, 'text-anchor': 'end' }, fmtTime(t, true)));
+  }
+  for (const p of [0, 25, 50, 75, 90, 99]) {
+    root.append(svg('line', { x1: x(p), x2: x(p), y1: H - m.b, y2: H - m.b + 4, stroke: 'var(--baseline)' }),
+      svg('text', { x: x(p), y: H - m.b + 17, 'text-anchor': p === 99 ? 'end' : 'middle' }, p === 0 ? 'fastest' : 'p' + p));
+  }
+  root.append(svg('line', { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, stroke: 'var(--baseline)' }));
+  for (const s of series) {
+    const d = s.q.map((v, p) => `${p ? 'L' : 'M'}${x(p).toFixed(1)},${y(v).toFixed(1)}`).join('');
+    root.append(svg('path', { d, fill: 'none', stroke: colorOf(s.engine), 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+  }
+  const hair = svg('line', { y1: m.t, y2: H - m.b, stroke: 'var(--muted)', 'stroke-width': 1, visibility: 'hidden' });
+  const marks = series.map((s) => svg('circle', { r: 4.5, fill: colorOf(s.engine), stroke: 'var(--surface-1)', 'stroke-width': 2, visibility: 'hidden' }));
+  root.append(hair, marks);
+  const hit = svg('rect', { x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: 'transparent', tabindex: 0, 'aria-label': 'Percentile curve: move the pointer or use the arrow keys to read values' });
+  let at = 50;
+  const show = (p, cx, cy) => {
+    at = Math.max(0, Math.min(100, p));
+    hair.setAttribute('x1', x(at)); hair.setAttribute('x2', x(at)); hair.setAttribute('visibility', 'visible');
+    series.forEach((s, i) => { marks[i].setAttribute('cx', x(at)); marks[i].setAttribute('cy', y(s.q[at])); marks[i].setAttribute('visibility', 'visible'); });
+    const label = at === 0 ? 'Fastest sample' : at === 100 ? 'Slowest sample' : `${at}th percentile`;
+    showTip(tipBox(label, `${at}% of operations were at least this fast`, series.map((s) => ({ color: colorOf(s.engine), label: engine(s.engine).label, value: fmtTime(s.q[at]) }))), cx, cy);
+  };
+  const off = () => { hair.setAttribute('visibility', 'hidden'); marks.forEach((c) => c.setAttribute('visibility', 'hidden')); hideTip(); };
+  hit.addEventListener('pointermove', (e) => { const b = root.getBoundingClientRect(); show(Math.round(((e.clientX - b.left - m.l) / (W - m.l - m.r)) * 100), e.clientX, e.clientY); });
+  hit.addEventListener('pointerleave', off);
+  const keyShow = () => { const b = root.getBoundingClientRect(); show(at, b.left + x(at), b.top + m.t + 20); };
+  hit.addEventListener('focus', keyShow);
+  hit.addEventListener('blur', off);
+  hit.addEventListener('keydown', (e) => {
+    const step = { ArrowLeft: -1, ArrowRight: 1, PageDown: -10, PageUp: 10 }[e.key];
+    if (step) { e.preventDefault(); at = Math.max(0, Math.min(100, at + step)); keyShow(); }
+  });
+  root.append(hit);
+  host.append(root);
+}
+function stripChart(wl) {
+  // Few samples: show every one of them instead of a percentile curve.
+  const per = run.engines.map((e) => ({ e, r: cur(e.key, wl.key) })).filter((x) => x.r && !x.r.error && x.r.samples && x.r.samples.length);
+  const values = per.flatMap((x) => x.r.samples).filter((v) => v > 0);
+  if (!values.length) return el('div', { class: 'empty', text: 'No samples for this database shape.' });
+  let lo = Math.log10(Math.min(...values)), hi = Math.log10(Math.max(...values));
+  const padLog = Math.max(0.08, (hi - lo) * 0.12); lo -= padLog; hi += padLog;
+  const pos = (v) => ((Math.log10(v) - lo) / (hi - lo)) * 100;
+  const ticks = thin(logTicks(lo, hi), 6);
+  const out = el('div', { class: 'rows tight' });
+  out.append(el('div', { class: 'r axis' }, el('div'), el('div', { class: 'plot', style: { margin: '0 24px' } },
+    ticks.map((t) => el('span', { class: 'tick', style: { left: pos(t) + '%' }, text: fmtTime(t, true) })))));
+  for (const { e, r } of per) {
+    const plot = el('div', { class: 'plot', style: { margin: '0 24px', 'min-height': '34px' } }, gridlines(ticks.map(pos)),
+      r.samples.filter((v) => v > 0).map((v) => el('i', { class: 'dot small', style: { left: pos(v) + '%', background: colorOf(e.key) } })),
+      el('i', { class: 'medtick', style: { left: pos(r.median) + '%' } }));
+    const row = el('div', { class: 'r' }, el('div', { class: 'r-label' }, e.label, el('small', { text: ` n=${r.n}` })), plot);
+    interactive(row, () => tipBox(e.label, `${r.n} timed runs`, [
+      { color: colorOf(e.key), label: 'Fastest', value: fmtTime(r.min) }, { label: 'Median', value: fmtTime(r.median) }, { label: 'Slowest', value: fmtTime(r.max) }]));
+    out.append(row);
+  }
+  return out;
+}
+function renderDetail() {
+  const host = clear(byId('detail'));
+  const wl = run._workloads.find((w) => w.key === state.focus);
+  if (!wl) { host.append(head('Workload drill-down')); return; }
+  const picker = el('div', { class: 'ctl' }, el('label', { class: 'cap', for: 'f-focus', text: 'Workload' }),
+    el('select', { class: 'sel', id: 'f-focus', onchange: (e) => focusWorkload(e.target.value, false) },
+      grouped(run._workloads).map((g) => el('optgroup', { label: g.label },
+        g.items.map((w) => el('option', { value: w.key, selected: w.key === wl.key, text: w.label }))))));
+  host.append(head('Workload drill-down: ' + wl.label, wl.description, picker));
+  host.append(el('div', { class: 'chips' },
+    el('span', { class: 'chip', text: wl.category }), el('span', { class: 'chip', text: cap(wl.kind) }),
+    el('span', { class: 'chip', text: `one sample = one ${wl.unit}` })));
+
+  // --- across shapes + scaling factors
+  const sh = shapes();
+  const rows = sh.map((x) => ({
+    label: `${x.s.label} · ${widthShort(x.w).toLowerCase()}`, small: `${fmtRows(x.s.rows)} rows`,
+    hl: x.s.key === state.size && x.w.key === state.width,
+    values: run.engines.map((e) => ({ engine: e.key, v: val(res(e.key, x.s.key, x.w.key, wl.key)) })),
+    tip: () => workloadTip(wl, x.s.key, x.w.key),
+    onClick: () => { state.size = x.s.key; state.width = x.w.key; render(); },
+  }));
+  const left = el('div', null, el('h3', { text: `How it scales: ${metricLabel()} time by database shape` }), legend('dotk'), dotChart(rows, { tight: true }));
+
+  const sMin = run.sizes[0], sMax = run.sizes[run.sizes.length - 1];
+  const wMin = run.widths[0], wMax = run.widths[run.widths.length - 1];
+  const scal = el('table', { class: 'data' });
+  const rowsX = sMax.rows / sMin.rows;
+  scal.append(el('thead', null, el('tr', null, el('th', { text: 'Engine' }),
+    run.sizes.length > 1 ? el('th', { text: `${fmtRows(sMin.rows)} → ${fmtRows(sMax.rows)} rows` }) : null,
+    run.widths.length > 1 ? el('th', { text: `${widthShort(wMin)} → ${widthShort(wMax).toLowerCase()}` }) : null)));
+  const sb = el('tbody');
+  for (const e of run.engines) {
+    const a1 = val(res(e.key, sMin.key, state.width, wl.key)), a2 = val(res(e.key, sMax.key, state.width, wl.key));
+    const b1 = val(res(e.key, state.size, wMin.key, wl.key)), b2 = val(res(e.key, state.size, wMax.key, wl.key));
+    const f = (x, y) => {
+      if (!x || !y) return 'n/a';
+      const k = y / x;
+      if (k > 0.95 && k < 1.05) return 'no change';
+      return k >= 1 ? `${sig(k, 3, true)}× longer` : `${sig(1 / k, 3, true)}× shorter`;
+    };
+    sb.append(el('tr', null,
+      el('td', null, el('span', { class: 'k' }, el('i', { class: 'sw dotk', style: { background: colorOf(e.key) } }), e.label)),
+      run.sizes.length > 1 ? el('td', { text: f(a1, a2) }) : null,
+      run.widths.length > 1 ? el('td', { text: f(b1, b2) }) : null));
+  }
+  scal.append(sb);
+  const right = el('div', null, el('h3', { text: 'Scaling factors' }), el('div', { class: 'scroll-x' }, scal),
+    el('p', { class: 'sub', style: { 'margin-top': '10px' } },
+      run.sizes.length > 1 ? `Growing the table ${fmtCount(rowsX)}× (at ${widthShort(widthOf(state.width)).toLowerCase()} rows): a factor near ${fmtCount(rowsX)}× means time grows in step with the table, a factor near 1× means the operation does not care how big the table is. ` : '',
+      run.widths.length > 1 ? `Widening the rows (at ${sizeOf(state.size).label.toLowerCase()} size) shows how much the operation pays for columns it does not need.` : ''));
+  host.append(el('div', { class: 'two' }, left, right));
+
+  // --- distribution + statistics
+  const here = run.engines.map((e) => ({ e, r: cur(e.key, wl.key) }));
+  const many = here.some((x) => x.r && x.r.quantiles);
+  const distHost = el('div', null, el('h3', { text: many ? 'Latency by percentile' : 'Individual timed runs (bar marks the median)' }), legend(many ? 'linek' : 'dotk'));
+  const stats = el('table', { class: 'data' });
+  stats.append(el('thead', null, el('tr', null, el('th', { text: 'Statistic' }),
+    here.map((x) => el('th', null, el('span', { class: 'k' }, el('i', { class: 'sw dotk', style: { background: colorOf(x.e.key) } }), x.e.label))))));
+  const statRows = [
+    ['Samples', (r) => r.n.toLocaleString('en-US')], ['Best', (r) => fmtTime(r.min)], ['Median', (r) => fmtTime(r.median)],
+    ['Mean', (r) => fmtTime(r.mean)], ['p95', (r) => fmtTime(r.p95)], ['p99', (r) => fmtTime(r.p99)], ['Worst', (r) => fmtTime(r.max)],
+    ['Spread (stdev ÷ mean)', (r) => (r.mean ? Math.round((r.stdev / r.mean) * 100) + '%' : 'n/a')],
+    [`Throughput (${plural(wl.unit)} per second)`, (r) => fmtCount(r.ops_per_s)],
+  ];
+  if (here.some((x) => x.r && x.r.rows_per_s)) statRows.push(['Rows per second', (r) => (r.rows_per_s ? fmtCount(r.rows_per_s) : '–')]);
+  const tb = el('tbody');
+  for (const [label, fn] of statRows) {
+    tb.append(el('tr', null, el('td', { text: label }), here.map((x) => el('td', { text: x.r && !x.r.error && x.r.n ? fn(x.r) : (x.r && x.r.error ? 'failed' : 'n/a') }))));
+  }
+  stats.append(tb);
+  const failures = here.filter((x) => x.r && x.r.error);
+  const statsHost = el('div', null, el('h3', { text: `Statistics · ${shapeLabel(sizeOf(state.size), widthOf(state.width))}` }), el('div', { class: 'scroll-x' }, stats),
+    failures.map((x) => el('p', { class: 'sub', style: { 'margin-top': '8px' }, text: `${x.e.label} failed: ${x.r.error}` })));
+  host.append(el('div', { class: 'two block' }, distHost, statsHost));
+  if (many) {
+    const series = here.map((x) => ({ engine: x.e.key, q: quantilesOf(x.r) })).filter((s) => s.q);
+    if (series.length) percentileChart(distHost, series); else distHost.append(el('div', { class: 'empty', text: 'No samples for this database shape.' }));
+  } else {
+    distHost.append(stripChart(wl));
+  }
+
+  // --- SQL
+  const kinds = [...new Set(run.engines.map((e) => e.kind))];
+  const sqlBlocks = wl.sql.all
+    ? [el('div', null, el('h3', { text: 'Statement (identical on both engines)' }), el('pre', { class: 'sql', text: wl.sql.all }))]
+    : kinds.filter((k) => wl.sql[k]).map((k) => el('div', null, el('h3', { text: `Statement · ${run.engines.find((e) => e.kind === k).label.replace(/\s*\(.*\)$/, '')}` }), el('pre', { class: 'sql', text: wl.sql[k] })));
+  host.append(el('div', { class: 'sqlgrid block' }, sqlBlocks));
+}
+
+// ---------------------------------------------------------------- storage
+function renderStorage() {
+  const host = clear(byId('storage'));
+  host.append(head('Size on disk', 'Bytes per row after the initial load, index build and checkpoint - comparable across database sizes. Labels add the total file size.',
+    legend('')));
+  const sh = shapes();
+  const all = sh.flatMap((x) => run.engines.map((e) => run._sto.get([e.key, x.s.key, x.w.key].join('|')))).filter(Boolean);
+  if (!all.length) { host.append(el('div', { class: 'empty', text: 'No storage measurements in this run.' })); return; }
+  const max = Math.max(...all.map((s) => s.bytes_per_row));
+  const rows = el('div', { class: 'rows' });
+  for (const x of sh) {
+    const lines = run.engines.map((e) => {
+      const s = run._sto.get([e.key, x.s.key, x.w.key].join('|'));
+      if (!s) return el('div', { class: 'bline' }, el('span', { class: 'val na', style: { left: '6px' }, text: 'n/a' }));
+      const w = (s.bytes_per_row / max) * 100;
+      return el('div', { class: 'bline' },
+        el('i', { class: 'bar right', style: { width: w + '%', background: colorOf(e.key) } }),
+        el('span', { class: 'val', style: { left: `calc(${w}% + 6px)` } }, `${fmtCount(s.bytes_per_row)} B/row`, el('span', { class: 'xtra', text: ` · ${fmtBytes(s.bytes)}` })));
+    });
+    const height = run.engines.length * 16 + 14;
+    const row = el('div', { class: 'r click' + (x.s.key === state.size && x.w.key === state.width ? ' hl' : ''), style: { 'min-height': height + 'px' } },
+      el('div', { class: 'r-label' }, `${x.s.label} · ${widthShort(x.w).toLowerCase()}`, el('small', { text: ` ${fmtRows(x.s.rows)} rows` })),
+      el('div', { class: 'plot', style: { 'min-height': height + 'px' } }, el('i', { class: 'gl base', style: { left: '0' } }), el('div', { class: 'stackbars' }, lines)));
+    interactive(row, () => tipBox(`${x.s.label} · ${widthShort(x.w).toLowerCase()}`, `${x.s.rows.toLocaleString('en-US')} rows × ${x.w.columns} columns`,
+      run.engines.map((e) => { const s = run._sto.get([e.key, x.s.key, x.w.key].join('|')); return { color: colorOf(e.key), label: e.label, note: s ? `${fmtCount(s.bytes_per_row)} B/row` : '', value: s ? fmtBytes(s.bytes) : 'n/a' }; })),
+      () => { state.size = x.s.key; state.width = x.w.key; render(); });
+    rows.append(row);
+  }
+  host.append(rows);
+}
+
+// ---------------------------------------------------------------- results table
+function renderTable() {
+  const host = clear(byId('results'));
+  const dl = el('button', { class: 'btn', type: 'button', id: 'csv', text: 'Download all results (CSV)', onclick: downloadCsv });
+  host.append(head('All numbers', `Every chart above as a table: ${metricLabel()} time and throughput for the selected database shape. Select a column header to sort, a row to drill in.`,
+    el('div', null, scopeNote(), el('div', { style: { 'margin-top': '6px' } }, dl))));
+  const wls = visibleWorkloads();
+  const order = new Map(run._workloads.map((w, i) => [w.key, i]));
+  const cols = [
+    { key: 'order', label: 'Workload', left: true, get: (w) => order.get(w.key), show: (w) => w.label },
+    { key: 'class', label: 'Class', left: true, get: (w) => `${w.category} ${w.kind}`, show: (w) => `${w.category} ${w.kind}` },
+    ...run.engines.map((e) => ({ key: 't:' + e.key, label: e.label, sw: e.key, get: (w) => val(cur(e.key, w.key)), show: (w) => { const r = cur(e.key, w.key), v = val(r); return v == null ? (r && r.error ? 'failed' : 'n/a') : fmtTime(v); } })),
+    { key: 'ratio', label: 'Faster', get: (w) => { const c = compare(state.size, state.width, w.key); return c ? Math.log(c.ratio) : null; },
+      show: (w) => { const c = compare(state.size, state.width, w.key); return !c ? 'n/a' : c.factor < 1.05 ? 'equal' : `${engine(c.winner).label} ${fmtFactor(c.factor)}`; } },
+    ...run.engines.map((e) => ({ key: 'r:' + e.key, label: `${e.label} per second`, sw: e.key, get: (w) => { const r = cur(e.key, w.key); return r && r.ops_per_s; }, show: (w) => { const r = cur(e.key, w.key); return r && r.ops_per_s ? fmtCount(r.ops_per_s) : 'n/a'; } })),
+    { key: 'n', label: 'Samples', get: (w) => { const r = cur(state.a, w.key); return r && r.n; }, show: (w) => run.engines.map((e) => { const r = cur(e.key, w.key); return r && r.n ? r.n.toLocaleString('en-US') : '–'; }).join(' / ') },
+  ];
+  const sortCol = cols.find((c) => c.key === state.sort.key) || cols[0];
+  const sorted = [...wls].sort((p, q) => {
+    const a = sortCol.get(p), b = sortCol.get(q);
+    if (a == null && b == null) return 0;
+    if (a == null) return 1;
+    if (b == null) return -1;
+    return (typeof a === 'string' ? a.localeCompare(b) : a - b) * state.sort.dir;
+  });
+  const table = el('table', { class: 'data' });
+  table.append(el('thead', null, el('tr', null, cols.map((c) => {
+    const active = c.key === sortCol.key;
+    return el('th', { scope: 'col', class: c.left ? 'l' : null, 'aria-sort': active ? (state.sort.dir > 0 ? 'ascending' : 'descending') : 'none' },
+      el('button', { type: 'button', id: 'sort-' + c.key, onclick: () => { state.sort = { key: c.key, dir: active ? -state.sort.dir : 1 }; render(); } },
+        c.sw ? el('i', { class: 'sw dotk', style: { background: colorOf(c.sw) } }) : null, c.label, active ? (state.sort.dir > 0 ? ' ▲' : ' ▼') : ''));
+  }))));
+  const body = el('tbody');
+  for (const w of sorted) {
+    const tr = el('tr', { class: 'click' }, cols.map((c) => el('td', { class: c.left ? 'l' : null, text: c.show(w) })));
+    tr.addEventListener('click', () => focusWorkload(w.key));
+    body.append(tr);
+  }
+  if (!sorted.length) body.append(el('tr', null, el('td', { colspan: cols.length, class: 'mut', text: 'No results match these filters.' })));
+  table.append(body);
+  host.append(el('div', { class: 'scroll-x' }, table));
+}
+function downloadCsv() {
+  const fields = ['n', 'min', 'median', 'mean', 'p90', 'p95', 'p99', 'max', 'stdev', 'ops_per_s', 'rows_per_op', 'rows_per_s', 'error'];
+  const quote = (v) => (v == null ? '' : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  const lines = [['engine', 'database_size', 'rows', 'row_width', 'workload', 'category', 'operation', 'unit', ...fields.map((f) => (['min', 'median', 'mean', 'p90', 'p95', 'p99', 'max', 'stdev'].includes(f) ? f + '_seconds' : f))].join(',')];
+  const wl = new Map(run.workloads.map((w) => [w.key, w]));
+  for (const r of run.results) {
+    const w = wl.get(r.workload) || {};
+    lines.push([r.engine, r.size, (sizeOf(r.size) || {}).rows, r.width, r.workload, w.category, w.kind, w.unit, ...fields.map((f) => r[f])].map(quote).join(','));
+  }
+  const url = URL.createObjectURL(new Blob([lines.join('\n') + '\n'], { type: 'text/csv' }));
+  const a = el('a', { href: url, download: `duckdb-vs-sqlite-${run.run_id}.csv` });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ---------------------------------------------------------------- methodology
+function renderMethod() {
+  const host = clear(byId('method'));
+  const s = run.system, c = run.config;
+  host.append(head('How this was measured', 'Read this before quoting a number: benchmark results describe one machine, one configuration and one driver.'));
+  const kv = (pairs) => el('dl', { class: 'kv' }, pairs.filter((p) => p[1] != null && p[1] !== '').flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: String(v) })]));
+  const blocks = el('div', { class: 'method' });
+  blocks.append(el('div', null, el('h3', { text: 'Machine and software' }), kv([
+    ['Operating system', s.os], ['CPU', s.cpu], ['Cores', `${s.cores_physical || '?'} physical, ${s.cores_logical} logical`],
+    ['Memory', `${s.ram_gb} GB`], ['Python', s.python], ['SQLite', s.sqlite], ['DuckDB', s.duckdb], ['PyArrow', s.pyarrow],
+    ['Run', `${run.started_at} (${Math.round(run.duration_s)} s, preset "${c.preset}")`]])));
+  for (const e of run.engines) {
+    blocks.append(el('div', null, el('h3', null, el('span', { class: 'k', style: { display: 'inline-flex', 'align-items': 'center', gap: '6px' } }, el('i', { class: 'sw dotk', style: { background: colorOf(e.key) } }), `${e.label} settings`)), kv(Object.entries(e.settings || {}))));
+  }
+  blocks.append(el('div', null, el('h3', { text: 'Run configuration' }), kv([
+    ['Database sizes', run.sizes.map((x) => `${x.label}: ${x.rows.toLocaleString('en-US')} rows`).join('; ')],
+    ['Row widths', run.widths.map((w) => `${widthShort(w)}: ${w.columns} columns`).join('; ')],
+    ['Analytical repeats', `${c.repeats} timed runs after 1 warm-up`],
+    ['OLTP reads', `${c.oltp_read_ops.toLocaleString('en-US')} lookups per workload`],
+    ['OLTP writes', `${c.oltp_write_ops.toLocaleString('en-US')} commits per workload`],
+    ['Batch size', `${c.batch_rows.toLocaleString('en-US')} rows per executemany() batch`],
+    ['Time budget', `${c.budget_s} s per workload (slow workloads get fewer samples)`]])));
+  host.append(blocks);
+  const note = (title, text) => el('li', null, el('b', { text: title + ' ' }), text);
+  host.append(el('div', { class: 'block' }, el('h3', { text: 'What the numbers mean' }), el('ul', { class: 'notes' },
+    note('Same data, same questions.', 'Both engines load identical generated rows and run the same SQL with the same parameters in the same order (the statements differ only where the dialects do, and both versions are shown in the drill-down). Generating data is never timed.'),
+    note('Timed from Python.', 'Every sample covers execute() plus fetchall(): the time until an application holds its answer as Python objects. Driver overhead is included on purpose, and it dominates the smallest operations.'),
+    note('Equal durability.', 'Every commit is flushed to disk on both engines. SQLite is far faster with synchronous=NORMAL or OFF, at the price of losing recent commits in a power cut; rerun with --sqlite-synchronous to see it.'),
+    note('Threads.', 'SQLite runs a query on one thread; DuckDB uses every core unless a single-thread variant was added to the run. Much of an analytical gap on a many-core machine is parallelism.'),
+    note('Bulk load vs batch insert.', 'Bulk load uses each engine\'s idiomatic fast path from in-memory data. Batch insert uses the same row-at-a-time executemany() API on both, which is the wrong tool for DuckDB and shows it.'),
+    note('Warm cache, one connection.', 'The operating system file cache is warm throughout, including for "open database + first lookup". Nothing here measures concurrent writers or many simultaneous connections.'),
+    note('Summaries.', 'Tiles use the geometric mean of per-workload ratios, so no single workload dominates. With only a handful of samples, p95 and p99 are close to the slowest run.'))));
+}
+
+// ---------------------------------------------------------------- app
+function render() {
+  hideTip();
+  const activeId = document.activeElement && document.activeElement.id;
+  syncState();
+  renderHeader(); renderFilters(); renderTiles(); renderSpeedup(); renderLatency();
+  renderMatrix(); renderDetail(); renderStorage(); renderTable(); renderMethod();
+  if (activeId) { const n = byId(activeId); if (n) n.focus({ preventScroll: true }); }
+}
+const themeBtn = byId('theme');
+const media = matchMedia('(prefers-color-scheme: dark)');
+const isDark = () => (document.documentElement.dataset.theme || (media.matches ? 'dark' : 'light')) === 'dark';
+const labelTheme = () => { themeBtn.textContent = isDark() ? 'Light mode' : 'Dark mode'; };
+themeBtn.addEventListener('click', () => { document.documentElement.dataset.theme = isDark() ? 'light' : 'dark'; labelTheme(); render(); });
+media.addEventListener('change', () => { labelTheme(); render(); });
+let resizeTimer = 0, lastWidth = innerWidth;
+addEventListener('resize', () => {
+  if (innerWidth === lastWidth) return;
+  lastWidth = innerWidth;
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(render, 150);
+});
+addEventListener('scroll', hideTip, { passive: true });
+labelTheme();
+render();
+})();
+</script>
+</body>
+</html>

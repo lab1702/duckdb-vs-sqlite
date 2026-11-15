@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+
+# Lockfiles pin versions; this project always resolves to the latest releases.
+uv.lock
+
+# Benchmark scratch databases and generated output
+.bench-work/
+results/
