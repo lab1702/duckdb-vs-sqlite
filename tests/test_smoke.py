@@ -315,3 +315,28 @@ def test_unselected_load_and_index_run_once(tmp_path, monkeypatch):
     out = Runner(cfg, tmp_path / "b", console=Console(quiet=True), only="bulk_load|point_select").run()
     assert len(loads) == len(cfg.widths) * cfg.repeats  # selected: every repetition is a sample
     assert {r["n"] for r in out["results"] if r["workload"] == "bulk_load"} == {cfg.repeats}
+
+
+def test_failed_load_is_recorded_and_the_run_goes_on(tmp_path, monkeypatch, capsys):
+    def broken(self, con, staging):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(SqliteEngine, "bulk_load_orders", broken)
+    # The other engine is still measured and the results are still saved, but the exit status says it failed.
+    assert _run_cli(tmp_path, "--rows", "300", "--widths", "narrow", "--only", "bulk_load|point_select") == 1
+    assert "1 workload(s) failed" in capsys.readouterr().out
+    records = json.loads((tmp_path / "out" / "latest.json").read_text(encoding="utf-8"))["results"]
+    by_engine = {e: {r["workload"]: r for r in records if r["engine"] == e} for e in ("sqlite", "duckdb")}
+    assert set(by_engine["sqlite"]) == {"bulk_load"} and "disk full" in by_engine["sqlite"]["bulk_load"]["error"]
+    assert set(by_engine["duckdb"]) == {"bulk_load", "point_select"}
+    assert not any(r.get("error") for r in by_engine["duckdb"].values())
+    assert not (tmp_path / "work").exists()
+
+
+def test_keep_data_keeps_every_database_shape(tmp_path):
+    cfg = _tiny_config(sizes=[SizeSpec("a", "A", 300), SizeSpec("b", "B", 400)], repeats=1)
+    Runner(cfg, tmp_path, console=Console(quiet=True), only="point_select", keep_data=True).run()
+    assert sorted(p.name for p in tmp_path.glob("bench-*.sqlite")) == [
+        "bench-sqlite-300-narrow.sqlite", "bench-sqlite-300-wide.sqlite",
+        "bench-sqlite-400-narrow.sqlite", "bench-sqlite-400-wide.sqlite",
+    ]

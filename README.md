@@ -45,7 +45,9 @@ self-contained HTML file with no external requests: open it from disk, e-mail it
 
 No dependency is pinned and no lockfile is committed (`uv.lock` is git-ignored), so every
 fresh install resolves to the newest release of DuckDB, PyArrow, psutil and Rich. To move
-an existing environment forward: `uv sync --upgrade` or `pip install --upgrade .`.
+an existing environment forward: `uv sync --upgrade` or
+`pip install --upgrade --upgrade-strategy eager .` (plain `--upgrade` leaves dependencies that
+are already installed where they are).
 
 SQLite is the one exception you do not control from here: Python's `sqlite3` module uses the
 SQLite library bundled with (Windows, macOS python.org builds) or linked by (most Linux builds)

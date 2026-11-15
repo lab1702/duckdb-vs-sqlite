@@ -239,7 +239,7 @@ svg text.lbl { fill: var(--text-secondary); font-size: 12px; }
   <section id="speedup" class="card"></section>
   <section id="latency" class="card"></section>
   <section id="matrix" class="card"></section>
-  <section id="detail" class="card"></section>
+  <section id="detail" class="card" tabindex="-1"></section>
   <section id="storage" class="card"></section>
   <section id="results" class="card"></section>
   <section id="method" class="card"></section>
@@ -327,6 +327,7 @@ function fmtBytes(b) {
   return (i === 0 ? Math.round(b) : sig(b)) + ' ' + units[i];
 }
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const ordinal = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
 const plural = (unit) => (unit.endsWith('y') ? unit.slice(0, -1) + 'ies' : unit.endsWith('ch') ? unit + 'es' : unit + 's');
 const geomean = (xs) => Math.exp(xs.reduce((a, x) => a + Math.log(x), 0) / xs.length);
 
@@ -412,6 +413,7 @@ const widthShort = (w) => w.label.replace(/\s*rows$/i, '');
 const shapeLabel = (s, w) => `${s.label} (${fmtRows(s.rows)} rows) · ${widthShort(w).toLowerCase()}`;
 const metricLabel = () => METRICS.find((m) => m[0] === state.metric)[1].toLowerCase();
 const res = (e, s, w, wl) => run._idx.get([e, s, w, wl].join('|'));
+const sto = (e, s, w) => run._sto.get([e, s, w].join('|'));
 const val = (r) => (r && !r.error && r.n > 0 && isFinite(r[state.metric]) ? r[state.metric] : null);
 const cur = (e, wl) => res(e, state.size, state.width, wl);
 const shapes = () => run.sizes.flatMap((s) => run.widths.map((w) => ({ s, w })));
@@ -485,7 +487,8 @@ function workloadTip(wl, sizeKey, widthKey) {
 function focusWorkload(key, scroll = true) {
   state.focus = key;
   render();
-  if (scroll) byId('detail').scrollIntoView({ block: 'start' });
+  // The row that was activated is gone after render(): continue from the drill-down it opened.
+  if (scroll) { byId('detail').scrollIntoView({ block: 'start' }); byId('detail').focus({ preventScroll: true }); }
 }
 
 // ---------------------------------------------------------------- scales
@@ -584,7 +587,7 @@ function renderTiles() {
       el('div', { class: 't-who' }, el('i', { class: 'sw', style: { background: colorOf(winner) } }), factor < 1.05 ? 'about even' : `${engine(winner).label} faster`),
       el('div', { class: 't-note', text: `geometric mean of ${cs.length} workload${cs.length > 1 ? 's' : ''}; ${engine(winner).label} wins ${wins}` })));
   }
-  const sa = run._sto.get([state.a, state.size, state.width].join('|')), sb = run._sto.get([state.b, state.size, state.width].join('|'));
+  const sa = sto(state.a, state.size, state.width), sb = sto(state.b, state.size, state.width);
   if (!solo() && sa && sb && sa.bytes && sb.bytes) {
     const smaller = sa.bytes <= sb.bytes ? state.a : state.b;
     const factor = Math.max(sa.bytes, sb.bytes) / Math.min(sa.bytes, sb.bytes);
@@ -644,7 +647,7 @@ function renderSpeedup() {
 }
 
 // ---------------------------------------------------------------- dot (dumbbell) chart
-/** rows: [{label, small, values: [{engine, v}], tip, onClick, focus, hl}] */
+/** rows: [{id, label, small, values: [{engine, v}], tip, onClick, focus, hl}]; id lets render() restore keyboard focus */
 function dotChart(rows, opts = {}) {
   const values = rows.flatMap((r) => (r.values || []).map((x) => x.v)).filter((v) => v != null && v > 0);
   if (!values.length) return el('div', { class: 'empty', text: 'No results match these filters.' });
@@ -675,7 +678,7 @@ function dotChart(rows, opts = {}) {
     } else {
       plot.append(el('span', { class: 'val na', style: { left: '6px' }, text: 'no data' }));
     }
-    const row = el('div', { class: 'r' + (r.onClick ? ' click' : '') + (r.focus ? ' focus' : '') + (r.hl ? ' hl' : '') },
+    const row = el('div', { id: r.id, class: 'r' + (r.onClick ? ' click' : '') + (r.focus ? ' focus' : '') + (r.hl ? ' hl' : '') },
       el('div', { class: 'r-label' }, r.label, r.small ? el('small', { text: ' ' + r.small }) : null), plot);
     if (r.tip) interactive(row, r.tip, r.onClick);
     out.append(row);
@@ -796,7 +799,7 @@ function percentileChart(host, series) {
     at = Math.max(0, Math.min(100, p));
     hair.setAttribute('x1', x(at)); hair.setAttribute('x2', x(at)); hair.setAttribute('visibility', 'visible');
     series.forEach((s, i) => { marks[i].setAttribute('cx', x(at)); marks[i].setAttribute('cy', y(s.q[at])); marks[i].setAttribute('visibility', 'visible'); });
-    const label = at === 0 ? 'Fastest sample' : at === 100 ? 'Slowest sample' : `${at}th percentile`;
+    const label = at === 0 ? 'Fastest sample' : at === 100 ? 'Slowest sample' : `${ordinal(at)} percentile`;
     showTip(tipBox(label, `${at}% of operations were at least this fast`, series.map((s) => ({ color: colorOf(s.engine), label: engine(s.engine).label, value: fmtTime(s.q[at]) }))), cx, cy);
   };
   const off = () => { hair.setAttribute('visibility', 'hidden'); marks.forEach((c) => c.setAttribute('visibility', 'hidden')); hideTip(); };
@@ -851,6 +854,7 @@ function renderDetail() {
   // --- across shapes + scaling factors
   const sh = shapes();
   const rows = sh.map((x) => ({
+    id: `shape-${x.s.key}-${x.w.key}`,
     label: `${x.s.label} · ${widthShort(x.w).toLowerCase()}`, small: `${fmtRows(x.s.rows)} rows`,
     hl: x.s.key === state.size && x.w.key === state.width,
     values: run.engines.map((e) => ({ engine: e.key, v: val(res(e.key, x.s.key, x.w.key, wl.key)) })),
@@ -932,13 +936,13 @@ function renderStorage() {
   host.append(head('Size on disk', 'Bytes per row after the initial load, index build and checkpoint - comparable across database sizes. Labels add the total file size.',
     legend('')));
   const sh = shapes();
-  const all = sh.flatMap((x) => run.engines.map((e) => run._sto.get([e.key, x.s.key, x.w.key].join('|')))).filter(Boolean);
+  const all = sh.flatMap((x) => run.engines.map((e) => sto(e.key, x.s.key, x.w.key))).filter(Boolean);
   if (!all.length) { host.append(el('div', { class: 'empty', text: 'No storage measurements in this run.' })); return; }
   const max = Math.max(...all.map((s) => s.bytes_per_row));
   const rows = el('div', { class: 'rows' });
   for (const x of sh) {
     const lines = run.engines.map((e) => {
-      const s = run._sto.get([e.key, x.s.key, x.w.key].join('|'));
+      const s = sto(e.key, x.s.key, x.w.key);
       if (!s) return el('div', { class: 'bline' }, el('span', { class: 'val na', style: { left: '6px' }, text: 'n/a' }));
       const w = (s.bytes_per_row / max) * 100;
       return el('div', { class: 'bline' },
@@ -946,11 +950,11 @@ function renderStorage() {
         el('span', { class: 'val', style: { left: `calc(${w}% + 6px)` } }, `${fmtCount(s.bytes_per_row)} B/row`, el('span', { class: 'xtra', text: ` · ${fmtBytes(s.bytes)}` })));
     });
     const height = run.engines.length * 16 + 14;
-    const row = el('div', { class: 'r click' + (x.s.key === state.size && x.w.key === state.width ? ' hl' : ''), style: { 'min-height': height + 'px' } },
+    const row = el('div', { id: `sto-${x.s.key}-${x.w.key}`, class: 'r click' + (x.s.key === state.size && x.w.key === state.width ? ' hl' : ''), style: { 'min-height': height + 'px' } },
       el('div', { class: 'r-label' }, `${x.s.label} · ${widthShort(x.w).toLowerCase()}`, el('small', { text: ` ${fmtRows(x.s.rows)} rows` })),
       el('div', { class: 'plot', style: { 'min-height': height + 'px' } }, el('i', { class: 'gl base', style: { left: '0' } }), el('div', { class: 'stackbars' }, lines)));
     interactive(row, () => tipBox(`${x.s.label} · ${widthShort(x.w).toLowerCase()}`, `${x.s.rows.toLocaleString('en-US')} rows × ${x.w.columns} columns`,
-      run.engines.map((e) => { const s = run._sto.get([e.key, x.s.key, x.w.key].join('|')); return { color: colorOf(e.key), label: e.label, note: s ? `${fmtCount(s.bytes_per_row)} B/row` : '', value: s ? fmtBytes(s.bytes) : 'n/a' }; })),
+      run.engines.map((e) => { const s = sto(e.key, x.s.key, x.w.key); return { color: colorOf(e.key), label: e.label, note: s ? `${fmtCount(s.bytes_per_row)} B/row` : '', value: s ? fmtBytes(s.bytes) : 'n/a' }; })),
       () => { state.size = x.s.key; state.width = x.w.key; render(); });
     rows.append(row);
   }

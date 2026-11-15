@@ -43,6 +43,7 @@ class Runner:
         self.keep_data = keep_data
         self.results: list[dict] = []
         self.storage: list[dict] = []
+        self.failures = 0  # workloads that raised, recorded or not
 
     # -- public -------------------------------------------------------------
     def run(self) -> dict:
@@ -132,7 +133,8 @@ class Runner:
     def _run_engine(self, engine: Engine, size: SizeSpec, width: WidthSpec,
                     staging: Staging, pool: list[tuple]) -> dict[str, dict]:
         ctx = Ctx(
-            engine=engine, cfg=self.cfg, staging=staging, db_path=engine.db_path(self.workdir),
+            engine=engine, cfg=self.cfg, staging=staging,
+            db_path=engine.db_path(self.workdir, size.rows, width.key),
             rows=size.rows, width=width.key, customers=n_customers(size.rows), pool=pool,
         )
         engine.remove_files(ctx.db_path)
@@ -158,6 +160,7 @@ class Runner:
                     # Unselected, they run once: repeating them would only time discarded samples.
                     ctx.cfg = self.cfg if self._selected(key) else self._setup_cfg
                     record = {"engine": engine.spec.key, "size": size.key, "width": width.key, "workload": key}
+                    failed = False
                     try:
                         outcome = workload.run(ctx)
                         record.update(summarize(outcome.samples))
@@ -168,16 +171,19 @@ class Runner:
                         if outcome.result_rows is not None:
                             record["result_rows"] = outcome.result_rows
                     except Exception as exc:  # keep going: one failure must not sink the run
-                        if workload.phase == "load":
-                            raise
+                        failed = True
+                        self.failures += 1
                         record.update({"n": 0, "error": f"{type(exc).__name__}: {exc}"[:500]})
                         self.console.print(f"[yellow]{escape(label)} / {key} failed: {escape(record['error'])}[/yellow]")
                         self._recover(ctx)
-                    if workload.phase == "cold" or ctx.con is None:
-                        ctx.con = engine.connect(ctx.db_path)
                     if self._selected(key):
                         self.results.append(record)
                         out[key] = record
+                    if failed and workload.phase == "load":
+                        # Without the table nothing else can run here; the other engines and shapes still can.
+                        break
+                    if workload.phase == "cold" or ctx.con is None:
+                        ctx.con = engine.connect(ctx.db_path)
         finally:
             if ctx.con is not None:
                 try:

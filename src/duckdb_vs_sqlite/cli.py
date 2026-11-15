@@ -148,6 +148,10 @@ def _cmd_run(args: argparse.Namespace, console: Console) -> int:
     _print_path(console, "results:  ", results_path)
     _print_path(console, "dashboard:", dashboard)
     _open(dashboard, args.no_open)
+    if runner.failures:
+        # The results are saved and worth reading, but a script or CI job must not take this for success.
+        console.print(f"[red]{runner.failures} workload(s) failed[/red] - see the messages above")
+        return 1
     return 0
 
 

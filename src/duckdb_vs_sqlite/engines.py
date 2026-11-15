@@ -64,8 +64,9 @@ class Engine:
         placeholders = ", ".join("?" for _ in order_columns(width))
         return f"INSERT INTO orders VALUES ({placeholders})"
 
-    def db_path(self, workdir: Path) -> Path:
-        return workdir / f"bench-{self.spec.key}{self.file_suffix}"
+    def db_path(self, workdir: Path, rows: int, width: str) -> Path:
+        # One file per database shape: --keep-data keeps every one of them, not just the last.
+        return workdir / f"bench-{self.spec.key}-{rows}-{width}{self.file_suffix}"
 
     # The file helpers depend only on the engine kind, so they also work on the class.
     @classmethod
