@@ -68,6 +68,7 @@ class Outcome:
     samples: list[float]
     rows_per_op: float | None = None  # rows written/returned by one sample, for rows/s
     result_rows: int | None = None  # rows returned by the query (cross-engine sanity check)
+    table_rows: int | None = None  # rows in the table by then, where earlier write workloads changed it
 
 
 @dataclass(frozen=True)
@@ -451,6 +452,11 @@ CTAS_SQL = (
 )
 
 
+def _live_rows(ctx: Ctx) -> int:
+    """Rows in the table right now: the write workloads that ran earlier inserted and deleted some."""
+    return ctx.con.execute("SELECT count(*) FROM orders").fetchall()[0][0]
+
+
 def _run_ctas(ctx: Ctx) -> Outcome:
     def setup(_i: int) -> None:
         ctx.con.execute("DROP TABLE IF EXISTS order_summary")
@@ -458,9 +464,10 @@ def _run_ctas(ctx: Ctx) -> Outcome:
     def op(_i: int) -> None:
         ctx.con.execute(CTAS_SQL)
 
+    rows = _live_rows(ctx)
     samples = timed_repeats(ctx, op, warmup=0, setup=setup)
     ctx.con.execute("DROP TABLE IF EXISTS order_summary")
-    return Outcome(samples)
+    return Outcome(samples, table_rows=rows)
 
 
 BULK_UPDATE_SQL = "UPDATE orders\nSET amount = round(amount * 1.05, 2), status = 'returned'\nWHERE category = ?"
@@ -468,17 +475,12 @@ BULK_DELETE_BUCKETS = 20
 BULK_DELETE_SQL = f"DELETE FROM orders\nWHERE product_id % {BULK_DELETE_BUCKETS} = ?"
 
 
-def _live_rows(ctx: Ctx) -> int:
-    """Rows in the table right now: the write workloads that ran earlier inserted and deleted some."""
-    return ctx.con.execute("SELECT count(*) FROM orders").fetchall()[0][0]
-
-
 def _run_bulk_update(ctx: Ctx) -> Outcome:
     def op(i: int) -> None:
         ctx.con.execute(BULK_UPDATE_SQL, (CATEGORIES[i % len(CATEGORIES)],)).fetchall()
 
     rows = _live_rows(ctx)
-    return Outcome(timed_repeats(ctx, op, warmup=0), rows / len(CATEGORIES))
+    return Outcome(timed_repeats(ctx, op, warmup=0), rows / len(CATEGORIES), table_rows=rows)
 
 
 def _run_bulk_delete(ctx: Ctx) -> Outcome:
@@ -488,7 +490,7 @@ def _run_bulk_delete(ctx: Ctx) -> Outcome:
     rows = _live_rows(ctx)
     # Each run deletes a different bucket; once all are gone a further run would time a no-op.
     repeats = min(ctx.cfg.repeats, BULK_DELETE_BUCKETS)
-    return Outcome(timed_repeats(ctx, op, repeats=repeats, warmup=0), rows / BULK_DELETE_BUCKETS)
+    return Outcome(timed_repeats(ctx, op, repeats=repeats, warmup=0), rows / BULK_DELETE_BUCKETS, table_rows=rows)
 
 
 OLAP_WRITES = [

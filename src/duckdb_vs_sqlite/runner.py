@@ -116,18 +116,27 @@ class Runner:
         # Named like the benchmark databases: --workdir may hold a "staging.duckdb" of the user's.
         staging_path = self.workdir / "bench-staging.duckdb"
         DuckDBEngine.remove_files(staging_path)  # leftovers of an interrupted run
-        staging = Staging(staging_path, size.rows, width.key, self.cfg.extra_rows, self.cfg.seed)
+        staging: Staging | None = None
         shape_results: dict[str, dict[str, dict]] = {}
         try:
-            with self.console.status(f"generating {size.rows + self.cfg.extra_rows:,} rows ..."):
-                t0 = perf_counter()
-                staging.build()
-                pool = staging.extra_tuples()
+            try:
+                with self.console.status(f"generating {size.rows + self.cfg.extra_rows:,} rows ..."):
+                    t0 = perf_counter()
+                    staging = Staging(staging_path, size.rows, width.key, self.cfg.extra_rows, self.cfg.seed)
+                    staging.build()
+                    pool = staging.extra_tuples()
+            except Exception as exc:
+                # A full disk, typically. No engine can run this shape; the other shapes still can.
+                self.failures += 1
+                error = f"{type(exc).__name__}: {exc}"[:500]
+                self.console.print(f"[yellow]could not generate the data, skipping this database: {escape(error)}[/yellow]\n")
+                return
             self.console.print(f"[dim]generated dataset in {perf_counter() - t0:.1f} s[/dim]")
             for engine in engines:
                 shape_results[engine.spec.key] = self._run_engine(engine, size, width, staging, pool)
         finally:
-            staging.close()
+            if staging is not None:
+                staging.close()
             DuckDBEngine.remove_files(staging_path)
         self._print_shape_table(engines, shape_results)
 
@@ -141,6 +150,7 @@ class Runner:
         engine.remove_files(ctx.db_path)
         out: dict[str, dict] = {}
         label = engine.spec.label
+        key = EXECUTION_ORDER[0]
         try:
             with self.console.status("") as status:
                 for key in EXECUTION_ORDER:
@@ -171,6 +181,8 @@ class Runner:
                                 record["rows_per_s"] = round(outcome.rows_per_op / record["mean"], 1)
                         if outcome.result_rows is not None:
                             record["result_rows"] = outcome.result_rows
+                        if outcome.table_rows is not None:
+                            record["table_rows"] = outcome.table_rows
                     except Exception as exc:  # keep going: one failure must not sink the run
                         failed = True
                         self.failures += 1
@@ -185,6 +197,18 @@ class Runner:
                         break
                     if workload.phase == "cold" or ctx.con is None:
                         ctx.con = engine.connect(ctx.db_path)
+        except Exception as exc:
+            # A step between workloads failed - the checkpoint after the load, or reopening the
+            # database - typically on a full disk. This engine cannot go on with this shape; the
+            # other engines and shapes still can.
+            self.failures += 1
+            error = f"{type(exc).__name__}: {exc}"[:500]
+            self.console.print(f"[yellow]{escape(label)} stopped at {key}: {escape(error)}[/yellow]")
+            if self._selected(key) and key not in out:
+                record = {"engine": engine.spec.key, "size": size.key, "width": width.key, "workload": key,
+                          "n": 0, "error": error}
+                self.results.append(record)
+                out[key] = record
         finally:
             if ctx.con is not None:
                 try:

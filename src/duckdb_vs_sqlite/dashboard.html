@@ -866,9 +866,20 @@ function renderDetail() {
   const sMin = run.sizes[0], sMax = run.sizes[run.sizes.length - 1];
   const wMin = run.widths[0], wMax = run.widths[run.widths.length - 1];
   const scal = el('table', { class: 'data' });
-  const rowsX = sMax.rows / sMin.rows;
+  // The statements that run after the single-row writes see a table those writes have resized:
+  // their results carry the row count they really ran on.
+  const tableRows = (s) => {
+    for (const e of run.engines) {
+      const r = res(e.key, s.key, state.width, wl.key);
+      if (r && r.table_rows) return r.table_rows;
+    }
+    return s.rows;
+  };
+  const rMin = tableRows(sMin), rMax = tableRows(sMax);
+  const resized = rMin !== sMin.rows || rMax !== sMax.rows;
+  const rowsX = rMax / rMin;
   scal.append(el('thead', null, el('tr', null, el('th', { text: 'Engine' }),
-    run.sizes.length > 1 ? el('th', { text: `${fmtRows(sMin.rows)} → ${fmtRows(sMax.rows)} rows` }) : null,
+    run.sizes.length > 1 ? el('th', { text: `${fmtRows(rMin)} → ${fmtRows(rMax)} rows` }) : null,
     run.widths.length > 1 ? el('th', { text: `${widthShort(wMin)} → ${widthShort(wMax).toLowerCase()}` }) : null)));
   const sb = el('tbody');
   for (const e of run.engines) {
@@ -889,6 +900,7 @@ function renderDetail() {
   const right = el('div', null, el('h3', { text: 'Scaling factors' }), el('div', { class: 'scroll-x' }, scal),
     el('p', { class: 'sub', style: { 'margin-top': '10px' } },
       run.sizes.length > 1 ? `Growing the table ${fmtCount(rowsX)}× (at ${widthShort(widthOf(state.width)).toLowerCase()} rows): a factor near ${fmtCount(rowsX)}× means time grows in step with the table, a factor near 1× means the operation does not care how big the table is. ` : '',
+      run.sizes.length > 1 && resized ? 'These are the sizes the table had when this statement ran, after the single-row write workloads. ' : '',
       run.widths.length > 1 ? `Widening the rows (at ${sizeOf(state.size).label.toLowerCase()} size) shows how much the operation pays for columns it does not need.` : ''));
   host.append(el('div', { class: 'two' }, left, right));
 
@@ -1004,7 +1016,7 @@ function renderTable() {
   host.append(el('div', { class: 'scroll-x' }, table));
 }
 function downloadCsv() {
-  const fields = ['n', 'min', 'median', 'mean', 'p90', 'p95', 'p99', 'max', 'stdev', 'ops_per_s', 'rows_per_op', 'rows_per_s', 'error'];
+  const fields = ['n', 'min', 'median', 'mean', 'p90', 'p95', 'p99', 'max', 'stdev', 'ops_per_s', 'rows_per_op', 'rows_per_s', 'table_rows', 'error'];
   const quote = (v) => (v == null ? '' : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
   const lines = [['engine', 'database_size', 'rows', 'row_width', 'workload', 'category', 'operation', 'unit', ...fields.map((f) => (['min', 'median', 'mean', 'p90', 'p95', 'p99', 'max', 'stdev'].includes(f) ? f + '_seconds' : f))].join(',')];
   const wl = new Map(run.workloads.map((w) => [w.key, w]));

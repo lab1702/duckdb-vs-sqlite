@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import math
+import sqlite3
 
 import pytest
 from rich.console import Console
 
 from duckdb_vs_sqlite.cli import main
 from duckdb_vs_sqlite.config import ENGINES, SizeSpec, human_rows, make_config, parse_sizes
+from duckdb_vs_sqlite.datagen import Staging
 from duckdb_vs_sqlite.engines import DuckDBEngine, SqliteEngine
 from duckdb_vs_sqlite.report import PLACEHOLDER, build_dashboard
 from duckdb_vs_sqlite.runner import Runner, save_results
@@ -305,9 +307,13 @@ def test_bulk_delete_never_times_an_empty_delete(tmp_path):
 def test_bulk_statements_count_the_rows_the_table_holds_by_then(tmp_path):
     # batch_insert adds 5 batches of 20 rows to the 300 loaded: each bulk statement covers 1/20 of 400.
     cfg = _tiny_config(budget_s=60.0)
-    runner = Runner(cfg, tmp_path / "w", console=Console(quiet=True), only="^(batch_insert|bulk_update|bulk_delete)$")
+    runner = Runner(cfg, tmp_path / "w", console=Console(quiet=True),
+                    only="^(batch_insert|ctas|bulk_update|bulk_delete)$")
     records = runner.run()["results"]
     assert {r["rows_per_op"] for r in records if r["workload"].startswith("bulk_")} == {20.0}
+    # The dashboard's scaling factors need the size of the table these statements really ran on.
+    assert {(r["workload"], r.get("table_rows")) for r in records} == {
+        ("batch_insert", None), ("ctas", 400), ("bulk_update", 400), ("bulk_delete", 400)}
 
 
 def test_unselected_load_and_index_run_once(tmp_path, monkeypatch):
@@ -352,3 +358,35 @@ def test_keep_data_keeps_every_database_shape(tmp_path):
         "bench-sqlite-300-narrow.sqlite", "bench-sqlite-300-wide.sqlite",
         "bench-sqlite-400-narrow.sqlite", "bench-sqlite-400-wide.sqlite",
     ]
+
+
+def test_failed_checkpoint_is_recorded_and_the_run_goes_on(tmp_path, monkeypatch, capsys):
+    # A disk with room for SQLite's WAL but not for the checkpoint fails here, after the load itself.
+    def broken(self, con):
+        raise sqlite3.OperationalError("database or disk is full")
+
+    monkeypatch.setattr(SqliteEngine, "finalize_load", broken)
+    assert _run_cli(tmp_path, "--rows", "300", "--widths", "narrow", "--only", "cold_start|point_select") == 1
+    assert "1 workload(s) failed" in capsys.readouterr().out
+    records = json.loads((tmp_path / "out" / "latest.json").read_text(encoding="utf-8"))["results"]
+    by_engine = {e: {r["workload"]: r for r in records if r["engine"] == e} for e in ("sqlite", "duckdb")}
+    assert set(by_engine["sqlite"]) == {"cold_start"} and "disk is full" in by_engine["sqlite"]["cold_start"]["error"]
+    assert set(by_engine["duckdb"]) == {"cold_start", "point_select"}
+    assert not any(r.get("error") for r in by_engine["duckdb"].values())
+    assert not (tmp_path / "work").exists()
+
+
+def test_failed_data_generation_skips_the_shape_and_the_run_goes_on(tmp_path, monkeypatch, capsys):
+    original = Staging.build
+
+    def broken(self):
+        if self.width == "wide":
+            raise OSError("disk full")
+        original(self)
+
+    monkeypatch.setattr(Staging, "build", broken)
+    assert _run_cli(tmp_path, "--rows", "300", "--engines", "sqlite", "--only", "point_select") == 1
+    assert "disk full" in capsys.readouterr().out
+    records = json.loads((tmp_path / "out" / "latest.json").read_text(encoding="utf-8"))["results"]
+    assert [(r["width"], r["workload"], r.get("error")) for r in records] == [("narrow", "point_select", None)]
+    assert not (tmp_path / "work").exists()

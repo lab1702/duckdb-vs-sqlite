@@ -134,6 +134,8 @@ The schema is an `orders` fact table with a primary key and one secondary index,
   uses `executemany` on both.
 - **Order of operations.** Load, index, checkpoint, then all reads, then single-row writes,
   then the statements that rewrite 5% of the table - so reads never see a mutated table.
+  Those last statements run on a table the single-row writes have grown; the dashboard's
+  scaling factors use the size it has by then.
 - **Samples.** Analytical queries get one warm-up and up to `--repeats` timed runs; OLTP
   workloads get hundreds to thousands of operations. A soft time budget trims sample counts for
   very slow workloads; the dashboard reports `n` everywhere.
